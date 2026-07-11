@@ -219,23 +219,44 @@ def tmux_session():
     dots = "".join(f'<circle cx="{22+k*20}" cy="{BAR/2:.0f}" r="6" fill="{col}"/>'
                    for k, col in enumerate([C['red'], C['yellow'], C['green']]))
 
-    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img">
+    # ── compose the desktop: wallpaper + YASB bar + frosted floating terminal ──
+    M, GAP, BARH = 28, 18, 56
+    W2 = W + 2 * M
+    H2 = int(M + BARH + GAP + H + M)
+    ty = M + BARH + GAP
+
+    def blob(i, cx, cy, r, col, op):
+        return (f'<radialGradient id="b{i}" cx="{cx}%" cy="{cy}%" r="{r}%">'
+                f'<stop offset="0" stop-color="{col}" stop-opacity="{op}"/>'
+                f'<stop offset="1" stop-color="{col}" stop-opacity="0"/></radialGradient>')
+    wp = (
+        '<defs>'
+        f'<linearGradient id="wp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{C["crust"]}"/>'
+        f'<stop offset="1" stop-color="{C["mantle"]}"/></linearGradient>'
+        + blob(1, 16, 20, 60, C['mauve'], 0.40) + blob(2, 88, 14, 55, C['blue'], 0.32)
+        + blob(3, 62, 98, 60, C['teal'], 0.24) + blob(4, 6, 94, 46, C['pink'], 0.18)
+        + '</defs>'
+        + f'<rect x="0.5" y="0.5" width="{W2-1}" height="{H2-1}" rx="18" fill="url(#wp)" stroke="{C["surface0"]}"/>'
+        + "".join(f'<rect x="1" y="1" width="{W2-2}" height="{H2-2}" rx="18" fill="url(#b{i})"/>' for i in (1, 2, 3, 4))
+    )
+    # frosted terminal body: translucent so the wallpaper bleeds through
+    win = (
+        f'<rect x="0.5" y="0.5" width="{W-1}" height="{H-1}" rx="12" fill="{C["base"]}" fill-opacity="0.80" stroke="{C["surface1"]}"/>'
+        f'<path d="M0.5 12.5 A12 12 0 0 1 12.5 0.5 H{W-12.5} A12 12 0 0 1 {W-0.5} 12.5 V{BAR} H0.5 Z" fill="{C["mantle"]}" fill-opacity="0.66"/>'
+        f'<line x1="0.5" y1="{BAR}" x2="{W-0.5}" y2="{BAR}" stroke="{C["surface0"]}"/>'
+        f'{dots}<text x="{W/2:.0f}" y="{BAR/2+4:.0f}" text-anchor="middle" class="ttl">abhinav@indra-os — tmux</text>'
+        f'{diamond}{lines}{"".join(body)}{sbar}'
+    )
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W2}" height="{H2}" viewBox="0 0 {W2} {H2}" role="img">
 <style>text{{font-family:{FONT};font-size:{FS}px;font-variant-ligatures:none;white-space:pre;}} .ttl{{font-size:13px;fill:{C['subtext']};}}</style>
-<rect x="0.5" y="0.5" width="{W-1}" height="{H-1}" rx="12" fill="{C['base']}" stroke="{C['surface0']}"/>
-<path d="M0.5 12.5 A12 12 0 0 1 12.5 0.5 H{W-12.5} A12 12 0 0 1 {W-0.5} 12.5 V{BAR} H0.5 Z" fill="{C['mantle']}"/>
-<line x1="0.5" y1="{BAR}" x2="{W-0.5}" y2="{BAR}" stroke="{C['surface0']}"/>
-{dots}
-<text x="{W/2:.0f}" y="{BAR/2+4:.0f}" text-anchor="middle" class="ttl">abhinav@indra-os — tmux</text>
-{diamond}
-{lines}
-{"".join(body)}
-{sbar}
+{wp}
+<g transform="translate({M},{M})">{_yasb_inner(W)}</g>
+<g transform="translate({M},{ty})">{win}</g>
 </svg>'''
 
 
-def yasb_bar():
-    """YASB-style top status bar (the header): identity + workspaces + widgets."""
-    W, H = 920, 56
+def _yasb_inner(W, H=56):
+    """YASB status-bar content (bg + pills) drawn at 0,0 for the given width."""
     CR, ST, TX = C['crust'], C['subtext'], C['text']
     S0, MA = C['surface0'], C['mauve']
     y, ph = 12, 32                                    # pill y + height
@@ -271,11 +292,8 @@ def yasb_bar():
             f'<text x="{rx+12:.0f}" y="{y+22}" xml:space="preserve" fill="{fg}" font-weight="600">{esc(txt)}</text>')
         rx -= 7
 
-    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img">
-<style>text{{font-family:{FONT};font-size:{FS}px;white-space:pre;}}</style>
-<rect x="0.5" y="0.5" width="{W-1}" height="{H-1}" rx="14" fill="{C['mantle']}" stroke="{C['surface0']}"/>
-{"".join(parts)}
-</svg>'''
+    bg = f'<rect x="0.5" y="0.5" width="{W-1}" height="{H-1}" rx="14" fill="{C["mantle"]}" fill-opacity="0.82" stroke="{C["surface0"]}"/>'
+    return bg + "".join(parts)
 
 
 def waybar():
@@ -493,9 +511,7 @@ def build():
     ]
     out["internals"] = terminal("abhinav@indra-os : systemctl cat", intern, cursor=False)
 
-    out["waybar"] = waybar()
-    out["yasb"] = yasb_bar()
-    out["tmux"] = tmux_session()
+    out["desktop"] = tmux_session()   # wallpaper + YASB bar + frosted terminal
     return out
 
 
@@ -504,7 +520,7 @@ def main():
     root = os.path.dirname(here)
     adir = os.path.join(root, "assets")
     os.makedirs(adir, exist_ok=True)
-    KEEP = {"yasb", "tmux"}        # YASB header bar + single-window tmux layout
+    KEEP = {"desktop"}             # one image: wallpaper + YASB bar + frosted terminal
     panels = {k: v for k, v in build().items() if k in KEEP}
     for name, svg in panels.items():
         p = os.path.join(adir, f"{name}.svg")
