@@ -4,12 +4,12 @@
 
 <div align="center">
 
-<img src="assets/desktop.svg?v=2" width="100%" alt="indra-os — Hyprland desktop"/>
+<img src="assets/desktop.svg?v=3" width="100%" alt="indra-os — Hyprland desktop"/>
 
 <br/>
 
 <!-- business x tech operator panel: GTM/growth frameworks + compounding curve -->
-<img src="assets/growth.svg?v=1" width="100%" alt="growth-engine — business x tech operator"/>
+<img src="assets/growth.svg?v=2" width="100%" alt="growth-engine — business x tech operator"/>
 
 <br/>
 

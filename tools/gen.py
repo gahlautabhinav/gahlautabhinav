@@ -58,10 +58,40 @@ def _line_svg(spans, y):
     return f'<text x="{PADX}" y="{y}" xml:space="preserve">{"".join(parts)}</text>'
 
 
+def _wallpaper(W2, H2):
+    """Catppuccin wallpaper canvas: base gradient + soft colour glows."""
+    def blob(i, cx, cy, r, col, op):
+        return (f'<radialGradient id="b{i}" cx="{cx}%" cy="{cy}%" r="{r}%">'
+                f'<stop offset="0" stop-color="{col}" stop-opacity="{op}"/>'
+                f'<stop offset="1" stop-color="{col}" stop-opacity="0"/></radialGradient>')
+    return (
+        '<defs>'
+        f'<linearGradient id="wp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{C["crust"]}"/>'
+        f'<stop offset="1" stop-color="{C["mantle"]}"/></linearGradient>'
+        + blob(1, 16, 20, 60, C['mauve'], 0.40) + blob(2, 88, 14, 55, C['blue'], 0.32)
+        + blob(3, 62, 98, 60, C['teal'], 0.24) + blob(4, 6, 94, 46, C['pink'], 0.18)
+        + '</defs>'
+        + f'<rect x="0.5" y="0.5" width="{W2-1}" height="{H2-1}" rx="18" fill="url(#wp)" stroke="{C["surface0"]}"/>'
+        + "".join(f'<rect x="1" y="1" width="{W2-2}" height="{H2-2}" rx="18" fill="url(#b{i})"/>' for i in (1, 2, 3, 4))
+    )
+
+
+def _titlebar(W, title, frosted=False):
+    """Linux tiling-WM style title bar: app dot + left-aligned title, no mac buttons."""
+    op = ' fill-opacity="0.66"' if frosted else ''
+    return (
+        f'<path d="M0.5 12.5 A12 12 0 0 1 12.5 0.5 H{W-12.5} A12 12 0 0 1 {W-0.5} 12.5 V{BAR} H0.5 Z" fill="{C["mantle"]}"{op}/>'
+        f'<line x1="0.5" y1="{BAR}" x2="{W-0.5}" y2="{BAR}" stroke="{C["surface0"]}"/>'
+        f'<rect x="16" y="{BAR/2-5:.0f}" width="10" height="10" rx="3" fill="{C["mauve"]}"/>'
+        f'<text x="34" y="{BAR/2+4:.0f}" xml:space="preserve" class="ttl">{esc(title)}</text>'
+    )
+
+
 def terminal(title, lines, *, animate=False, min_cols=0, cursor=True,
-             accent="mauve", pre_svg=""):
+             accent="mauve", pre_svg="", frosted=False):
     """lines: list of list-of-spans. Returns SVG string.
-    pre_svg: raw SVG drawn in the body area behind the text (e.g. a vector logo)."""
+    pre_svg: raw SVG drawn in the body area behind the text (e.g. a vector logo).
+    frosted: float the (translucent) window on a wallpaper canvas."""
     cols = max([sum(len(t) for t, _ in ln) for ln in lines] + [len(title) + 6, min_cols])
     W = int(cols * CW + PADX * 2)
     H = int(BAR + PADY * 2 + len(lines) * LH)
@@ -101,22 +131,20 @@ def terminal(title, lines, *, animate=False, min_cols=0, cursor=True,
         cur = (f'<rect class="cur row" {delay} x="{cx:.0f}" y="{cy:.0f}" '
                f'width="{CW:.0f}" height="{FS:.0f}" rx="1" fill="{ac}"/>')
 
-    dots = "".join(
-        f'<circle cx="{22 + k*20}" cy="{BAR/2:.0f}" r="6" fill="{col}"/>'
-        for k, col in enumerate([C['red'], C['yellow'], C['green']])
+    win_op = ' fill-opacity="0.80"' if frosted else ''
+    edge = C['surface1'] if frosted else C['surface0']
+    window = (
+        f'<rect x="0.5" y="0.5" width="{W-1}" height="{H-1}" rx="12" fill="{C["base"]}"{win_op} stroke="{edge}"/>'
+        + _titlebar(W, title, frosted) + pre_svg + "".join(body) + cur
     )
-
-    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img">
-<style>{css}</style>
-<rect x="0.5" y="0.5" width="{W-1}" height="{H-1}" rx="12" fill="{C['base']}" stroke="{C['surface0']}"/>
-<path d="M0.5 12.5 A12 12 0 0 1 12.5 0.5 H{W-12.5} A12 12 0 0 1 {W-0.5} 12.5 V{BAR} H0.5 Z" fill="{C['mantle']}"/>
-<line x1="0.5" y1="{BAR}" x2="{W-0.5}" y2="{BAR}" stroke="{C['surface0']}"/>
-{dots}
-<text x="{W/2:.0f}" y="{BAR/2+4:.0f}" text-anchor="middle" class="ttl">{esc(title)}</text>
-{pre_svg}
-{"".join(body)}
-{cur}
-</svg>'''
+    if frosted:
+        M = 28
+        W2, H2 = W + 2 * M, H + 2 * M
+        return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W2}" height="{H2}" viewBox="0 0 {W2} {H2}" role="img">'
+                f'<style>{css}</style>{_wallpaper(W2, H2)}'
+                f'<g transform="translate({M},{M})">{window}</g></svg>')
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img">'
+            f'<style>{css}</style>{window}</svg>')
 
 
 def tmux_session():
@@ -238,36 +266,17 @@ def tmux_session():
         f'<text x="{W-24}" y="{sb_y+20}" xml:space="preserve" text-anchor="end" fill="{C["crust"]}">{esc(clock)}</text>'
     )
 
-    dots = "".join(f'<circle cx="{22+k*20}" cy="{BAR/2:.0f}" r="6" fill="{col}"/>'
-                   for k, col in enumerate([C['red'], C['yellow'], C['green']]))
-
     # ── compose the desktop: wallpaper + YASB bar + frosted floating terminal ──
     M, GAP, BARH = 28, 18, 56
     W2 = W + 2 * M
     H2 = int(M + BARH + GAP + H + M)
     ty = M + BARH + GAP
-
-    def blob(i, cx, cy, r, col, op):
-        return (f'<radialGradient id="b{i}" cx="{cx}%" cy="{cy}%" r="{r}%">'
-                f'<stop offset="0" stop-color="{col}" stop-opacity="{op}"/>'
-                f'<stop offset="1" stop-color="{col}" stop-opacity="0"/></radialGradient>')
-    wp = (
-        '<defs>'
-        f'<linearGradient id="wp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{C["crust"]}"/>'
-        f'<stop offset="1" stop-color="{C["mantle"]}"/></linearGradient>'
-        + blob(1, 16, 20, 60, C['mauve'], 0.40) + blob(2, 88, 14, 55, C['blue'], 0.32)
-        + blob(3, 62, 98, 60, C['teal'], 0.24) + blob(4, 6, 94, 46, C['pink'], 0.18)
-        + '</defs>'
-        + f'<rect x="0.5" y="0.5" width="{W2-1}" height="{H2-1}" rx="18" fill="url(#wp)" stroke="{C["surface0"]}"/>'
-        + "".join(f'<rect x="1" y="1" width="{W2-2}" height="{H2-2}" rx="18" fill="url(#b{i})"/>' for i in (1, 2, 3, 4))
-    )
+    wp = _wallpaper(W2, H2)
     # frosted terminal body: translucent so the wallpaper bleeds through
     win = (
         f'<rect x="0.5" y="0.5" width="{W-1}" height="{H-1}" rx="12" fill="{C["base"]}" fill-opacity="0.80" stroke="{C["surface1"]}"/>'
-        f'<path d="M0.5 12.5 A12 12 0 0 1 12.5 0.5 H{W-12.5} A12 12 0 0 1 {W-0.5} 12.5 V{BAR} H0.5 Z" fill="{C["mantle"]}" fill-opacity="0.66"/>'
-        f'<line x1="0.5" y1="{BAR}" x2="{W-0.5}" y2="{BAR}" stroke="{C["surface0"]}"/>'
-        f'{dots}<text x="{W/2:.0f}" y="{BAR/2+4:.0f}" text-anchor="middle" class="ttl">abhinav@indra-os — tmux</text>'
-        f'{diamond}{lines}{"".join(body)}{sbar}'
+        + _titlebar(W, "abhinav@indra-os — tmux", frosted=True)
+        + f'{diamond}{lines}{"".join(body)}{sbar}'
     )
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W2}" height="{H2}" viewBox="0 0 {W2} {H2}" role="img">
 <style>text{{font-family:{FONT};font-size:{FS}px;font-variant-ligatures:none;white-space:pre;}} .ttl{{font-size:13px;fill:{C['subtext']};}}</style>
@@ -355,7 +364,7 @@ def growth_panel():
         f'{dots}'
         f'<text x="{x0}" y="{top_y-8:.0f}" xml:space="preserve" fill="{C["overlay"]}" '
         f'style="font-size:13px">compounding growth  ·  leverage ▸ distribution ▸ revenue</text>')
-    return terminal("abhinav@indra-os : ~/ventures", L, cursor=False, min_cols=96, pre_svg=curve)
+    return terminal("abhinav@indra-os : ~/ventures", L, cursor=False, min_cols=96, pre_svg=curve, frosted=True)
 
 
 def waybar():
