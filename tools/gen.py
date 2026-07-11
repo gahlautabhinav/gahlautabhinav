@@ -319,11 +319,7 @@ def main():
     root = os.path.dirname(here)
     adir = os.path.join(root, "assets")
     os.makedirs(adir, exist_ok=True)
-    # Lean profile: only the two panels that carry the rice signal are shipped.
-    # build() still defines the rest (boot/services/btop/tmux/internals) — add a
-    # name here to re-enable a panel.
-    KEEP = {"waybar", "fastfetch"}
-    panels = {k: v for k, v in build().items() if k in KEEP}
+    panels = build()          # write every panel
     for name, svg in panels.items():
         p = os.path.join(adir, f"{name}.svg")
         with open(p, "w", encoding="utf-8") as f:
