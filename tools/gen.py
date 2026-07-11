@@ -107,6 +107,132 @@ def terminal(title, lines, *, animate=False, min_cols=0, cursor=True,
 </svg>'''
 
 
+def tmux_session():
+    """Everything in ONE terminal window, split into tmux panes + status bar."""
+    NCOLS = 94
+    VSPLIT = 52                                   # column of the vertical pane split
+    top = BAR + 6                                 # y of the content area
+    W = int(PADX * 2 + NCOLS * CW)
+    STATUS = 30
+
+    def colx(c):  return PADX + c * CW
+    def rowy(r):  return top + FS + r * LH
+    def txt(spans, c, r):
+        x = colx(c)
+        parts = "".join(f'<tspan fill="{col}">{esc(t)}</tspan>' for t, col in spans)
+        return f'<text x="{x:.1f}" y="{rowy(r):.1f}" xml:space="preserve">{parts}</text>'
+
+    def title(name, dashes):
+        return [sp(name, "mauve"), sp(" " + "─" * dashes, "overlay")]
+
+    # ── pane content ──────────────────────────────────────────────────────
+    ff = [
+        title("0:fastfetch", 20),
+        [sp("abhinav", "green"), sp("@", "text"), sp("indra-os", "mauve")],
+        [sp("─" * 28, "surface1")],
+        [sp("OS    ", "mauve"), sp("arch-based x86_64", "text")],
+        [sp("WM    ", "mauve"), sp("Hyprland · Waybar", "text")],
+        [sp("SHELL ", "mauve"), sp("zsh + powerlevel10k", "text")],
+        [sp("EDIT  ", "mauve"), sp("nvim · foot", "text")],
+        [sp("THEME ", "mauve"), sp("Catppuccin Mauve", "text")],
+        [sp("─" * 28, "surface1")],
+        [sp("CPU ", "blue"), sp("Detected  ", "text"), sp("MEM ", "blue"), sp("11/32G", "text")],
+        [sp("PY ", "blue"), sp("3.10  ", "text"), sp("NODE ", "blue"), sp("20  ", "text"), sp("DK ", "blue"), sp("27", "text")],
+        [sp("AI  ", "blue"), sp("◆", "mauve"), sp("claude ", "text"), sp("◆", "mauve"), sp("codex ", "text"), sp("◆", "mauve"), sp("gemini", "text")],
+    ]
+    boot = [
+        title("1:boot", 24),
+        [sp("[0.128] ", "overlay"), sp("kernel 6.11 ", "text"), sp("···· ", "surface1"), sp("ok", "green")],
+        [sp("[0.774] ", "overlay"), sp("Hyprland+bar ", "mauve"), sp("·· ", "surface1"), sp("ok", "green")],
+        [sp("[1.144] ", "overlay"), sp("agents c·c·g ", "text"), sp("· ", "surface1"), sp("ok", "green")],
+        [sp("[1.640] ", "overlay"), sp("graph mount ", "text"), sp("··· ", "surface1"), sp("ok", "green")],
+        [sp("[2.560] ", "overlay"), sp("bridge S↔EVM ", "peach"), sp("· ", "surface1"), sp("ok", "green")],
+    ]
+    git = [
+        title("2:git", 25),
+        [sp("* ", "yellow"), sp("a1f4c22 ", "peach"), sp("route → gemini", "text")],
+        [sp("* ", "yellow"), sp("7d90b1e ", "peach"), sp("meter acc 96.5%", "text")],
+        [sp("* ", "yellow"), sp("3c1aa87 ", "peach"), sp("harden bridge", "text")],
+        [sp("* ", "yellow"), sp("55e02fd ", "peach"), sp("merge intel", "text")],
+        [sp("* ", "yellow"), sp("e9b7740 ", "peach"), sp("NSE serverless", "text")],
+    ]
+    def svc(u, d):
+        return [sp("● ", "green"), sp(f"{u:<21}", "mauve"), sp("loaded ", "overlay"),
+                sp("active ", "green"), sp("running  ", "green"), sp(d, "subtext")]
+    sysc = [
+        title("3:systemctl status --all", 60),
+        svc("orchestrator.service", "indra-os · agent mission control"),
+        svc("vedicmind.service", "ved-project · FSA meter compiler + RAG"),
+        svc("intel.service", "xint · OSINT identity graph"),
+        svc("telegram.service", "telint · Telegram collection"),
+        svc("tripcode.service", "yotsuba-intel · 4chan correlation"),
+        svc("bridge.service", "Stellar ↔ EVM intent settlement"),
+        svc("market.service", "stock-intelligence · NSE council"),
+        svc("tray.service", "gptray · desktop LLM tray daemon"),
+        svc("cron.service", "github-ai-updates · repo poller"),
+        [sp("  9 loaded", "text"), sp(" · ", "overlay"), sp("9 active", "green"), sp(" · ", "overlay"), sp("0 failed", "green")],
+    ]
+
+    # ── place content ─────────────────────────────────────────────────────
+    # fastfetch: title at col 1, info at col 19 to clear the diamond
+    body = [txt(ff[0], 1, 0)] + [txt(ff[i], 19, i) for i in range(1, len(ff))]
+    for i, ln in enumerate(boot):        # boot: right-top, rows 0..5
+        body.append(txt(ln, VSPLIT + 2, i))
+    for i, ln in enumerate(git):         # git: right-bottom, rows 6..11
+        body.append(txt(ln, VSPLIT + 2, 6 + i))
+    for i, ln in enumerate(sysc):        # systemctl: full width, rows 13..24
+        body.append(txt(ln, 1, 13 + i))
+
+    # ── vector diamond in the fastfetch pane ──────────────────────────────
+    cx, cy, rx, ry, g = colx(9), rowy(6) - 4, 64, 118, 10
+    dia = lambda sx, sy: f"{cx:.0f},{cy-sy:.0f} {cx+sx:.0f},{cy:.0f} {cx:.0f},{cy+sy:.0f} {cx-sx:.0f},{cy:.0f}"
+    diamond = (f'<polygon points="{dia(rx, ry)}" fill="{C["mauve"]}"/>'
+               f'<polygon points="{dia(rx*0.6, ry*0.6)}" fill="{C["base"]}"/>'
+               f'<rect x="{cx-g:.0f}" y="{cy-g:.0f}" width="{g*2}" height="{g*2}" rx="2" '
+               f'fill="{C["teal"]}" transform="rotate(45 {cx:.0f} {cy:.0f})"/>')
+
+    # ── pane split lines ──────────────────────────────────────────────────
+    y_vtop = top + 2
+    y_hbar = rowy(11) + 8                  # between top section and systemctl
+    y_rgit = rowy(5) + 8                   # between boot and git
+    x_vs = colx(VSPLIT) - CW / 2
+    O = C['overlay']
+    lines = (
+        f'<line x1="{x_vs:.0f}" y1="{y_vtop:.0f}" x2="{x_vs:.0f}" y2="{y_hbar:.0f}" stroke="{O}"/>'
+        f'<line x1="{x_vs:.0f}" y1="{y_rgit:.0f}" x2="{W-10}" y2="{y_rgit:.0f}" stroke="{O}"/>'
+        f'<line x1="10" y1="{y_hbar:.0f}" x2="{W-10}" y2="{y_hbar:.0f}" stroke="{C["surface1"]}"/>'
+    )
+
+    # ── tmux status bar ───────────────────────────────────────────────────
+    H = int(y_hbar + 13 * LH + 14 + STATUS)
+    sb_y = H - STATUS - 6
+    windows = "0:fastfetch  1:boot  2:git  3:systemctl"
+    clock = "indra-os  14:22"
+    sbar = (
+        f'<rect x="8" y="{sb_y}" width="{W-16}" height="{STATUS-4}" rx="7" fill="{C["green"]}"/>'
+        f'<rect x="8" y="{sb_y}" width="88" height="{STATUS-4}" rx="7" fill="{C["mauve"]}"/>'
+        f'<text x="22" y="{sb_y+20}" xml:space="preserve" fill="{C["crust"]}" font-weight="700"> indra</text>'
+        f'<text x="120" y="{sb_y+20}" xml:space="preserve" fill="{C["crust"]}">{esc(windows)}</text>'
+        f'<text x="{W-24}" y="{sb_y+20}" xml:space="preserve" text-anchor="end" fill="{C["crust"]}">{esc(clock)}</text>'
+    )
+
+    dots = "".join(f'<circle cx="{22+k*20}" cy="{BAR/2:.0f}" r="6" fill="{col}"/>'
+                   for k, col in enumerate([C['red'], C['yellow'], C['green']]))
+
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img">
+<style>text{{font-family:{FONT};font-size:{FS}px;font-variant-ligatures:none;white-space:pre;}} .ttl{{font-size:13px;fill:{C['subtext']};}}</style>
+<rect x="0.5" y="0.5" width="{W-1}" height="{H-1}" rx="12" fill="{C['base']}" stroke="{C['surface0']}"/>
+<path d="M0.5 12.5 A12 12 0 0 1 12.5 0.5 H{W-12.5} A12 12 0 0 1 {W-0.5} 12.5 V{BAR} H0.5 Z" fill="{C['mantle']}"/>
+<line x1="0.5" y1="{BAR}" x2="{W-0.5}" y2="{BAR}" stroke="{C['surface0']}"/>
+{dots}
+<text x="{W/2:.0f}" y="{BAR/2+4:.0f}" text-anchor="middle" class="ttl">abhinav@indra-os — tmux</text>
+{diamond}
+{lines}
+{"".join(body)}
+{sbar}
+</svg>'''
+
+
 def waybar():
     """Horizontal Waybar with colored module pills."""
     mods = [
@@ -323,6 +449,7 @@ def build():
     out["internals"] = terminal("abhinav@indra-os : systemctl cat", intern, cursor=False)
 
     out["waybar"] = waybar()
+    out["tmux"] = tmux_session()
     return out
 
 
@@ -331,7 +458,8 @@ def main():
     root = os.path.dirname(here)
     adir = os.path.join(root, "assets")
     os.makedirs(adir, exist_ok=True)
-    panels = build()          # write every panel
+    KEEP = {"waybar", "tmux"}      # single-window tmux layout + the waybar strip
+    panels = {k: v for k, v in build().items() if k in KEEP}
     for name, svg in panels.items():
         p = os.path.join(adir, f"{name}.svg")
         with open(p, "w", encoding="utf-8") as f:
