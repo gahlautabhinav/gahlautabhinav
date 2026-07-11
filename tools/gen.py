@@ -183,22 +183,29 @@ def tmux_session():
     for i, ln in enumerate(sysc):        # systemctl: full width, rows 13..24
         body.append(txt(ln, 1, 13 + i))
 
-    # ── Arch Linux logo in the fastfetch pane (indra-os is arch-based) ────
-    ax = colx(9)                       # centre x
-    a_top = rowy(1) - 10               # apex
-    a_bot = rowy(10) + 6               # base
-    def archpts(bw, nw, nd, apex_dy=0):
-        t, b = a_top + apex_dy, a_bot
-        return (f"{ax:.0f},{t:.0f} {ax-bw:.0f},{b:.0f} {ax-nw:.0f},{b:.0f} "
-                f"{ax:.0f},{b-nd:.0f} {ax+nw:.0f},{b:.0f} {ax+bw:.0f},{b:.0f}")
-    diamond = (
-        '<defs><linearGradient id="arch" x1="0" y1="0" x2="0" y2="1">'
-        f'<stop offset="0" stop-color="{C["lavender"]}"/>'
-        f'<stop offset="1" stop-color="{C["mauve"]}"/></linearGradient></defs>'
-        # outer mountain, then an inner base-coloured cut to give the classic outline
-        f'<polygon points="{archpts(82, 22, 50)}" fill="url(#arch)"/>'
-        f'<polygon points="{archpts(50, 12, 30, apex_dy=34)}" fill="{C["base"]}" fill-opacity="0.28"/>'
-    )
+    # ── indra-os ASCII diamond logo (distro-logo style, box-drawing diagonals) ──
+    half, LHL = 6, 18                  # tight line height so the ╱╲ edges connect
+    lx, ly0 = colx(2), rowy(1) + 2
+    W_ = 2 * half + 2
+    specs = ([('╱', half - r, '╲', half + r + 1) for r in range(half + 1)]
+             + [('╲', k, '╱', 2 * half + 1 - k) for k in range(1, half + 1)])
+    dlines = []
+    for i, (lc, lcol, rc, rcol) in enumerate(specs):
+        row = [' '] * W_
+        row[lcol], row[rcol] = lc, rc
+        if i == half:                                  # gem on the widest (middle) row
+            row[(lcol + rcol) // 2] = '◆'
+        s = "".join(row).rstrip()
+        y = ly0 + i * LHL
+        if '◆' in s:
+            gi = s.index('◆')
+            spans = (f'<tspan fill="{C["mauve"]}">{esc(s[:gi])}</tspan>'
+                     f'<tspan fill="{C["teal"]}">◆</tspan>'
+                     f'<tspan fill="{C["mauve"]}">{esc(s[gi+1:])}</tspan>')
+        else:
+            spans = f'<tspan fill="{C["mauve"]}">{esc(s)}</tspan>'
+        dlines.append(f'<text x="{lx:.0f}" y="{y:.0f}" xml:space="preserve">{spans}</text>')
+    diamond = "".join(dlines)
 
     # ── pane split lines ──────────────────────────────────────────────────
     y_vtop = top + 2
