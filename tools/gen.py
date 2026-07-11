@@ -140,11 +140,36 @@ def waybar():
 </svg>'''
 
 
-def bar_row(label, pct, color, y, width_chars=26):
-    """observability gauge as spans."""
+def bar_row(label, pct, color, width_chars=24):
+    """observability gauge as spans (filled accent + dim remainder)."""
     filled = int(round(pct / 100 * width_chars))
-    bar = "█" * filled + "░" * (width_chars - filled)
-    return [sp(f"{label:<5}", "subtext"), sp(bar, color), sp(f" {pct:>3}%", "text")]
+    return [sp(f"{label:<5}", "subtext"), sp("█" * filled, color),
+            sp("░" * (width_chars - filled), "surface1"), sp(f" {pct:>3}%", "text")]
+
+
+def sbox(title, rows, innerW, tcolor):
+    """A fixed-width titled box. rows = list of list-of-spans (visible len <= innerW).
+    Returns list of lines (each exactly innerW+4 chars wide) so borders always align."""
+    S = "surface1"
+    Wb = innerW + 4
+    d = Wb - 5 - len(title)                      # ╭─ TITLE <dashes>╮
+    lines = [[sp("╭─ ", S), sp(title, tcolor), sp(" " + "─" * d, S), sp("╮", S)]]
+    for r in rows:
+        vis = sum(len(t) for t, _ in r)
+        lines.append([sp("│ ", S)] + r + [sp(" " * max(0, innerW - vis), "base"), sp(" │", S)])
+    lines.append([sp("╰" + "─" * (Wb - 2) + "╯", S)])
+    return lines
+
+
+def sbs(left, right, lw, gap=3):
+    """Place two boxes side by side. lw = left box total width (for blank padding)."""
+    n = max(len(left), len(right))
+    out = []
+    for i in range(n):
+        l = left[i] if i < len(left) else [sp(" " * lw, "base")]
+        r = right[i] if i < len(right) else []
+        out.append(l + [sp(" " * gap, "base")] + r)
+    return out
 
 
 # ── panel definitions ───────────────────────────────────────────────────────
@@ -204,20 +229,30 @@ def build():
     ]
     out["services"] = terminal("abhinav@indra-os : systemctl status --all", sv, cursor=False)
 
-    # observability (btop)
-    ob = [
-        [sp("╭─ ", "surface1"), sp("SYSTEM", "mauve"), sp(" ──────────────────────────╮   ", "surface1"), sp("╭─ ", "surface1"), sp("RUNTIME", "blue"), sp(" ───────────────╮", "surface1")],
-        [sp("│ ", "surface1")] + bar_row("CPU", 34, "mauve", 0) + [sp("  │   ", "surface1"), sp("│ ", "surface1"), sp("Services  ", "subtext"), sp("........  ", "surface1"), sp("9", "green"), sp("   │", "surface1")],
-        [sp("│ ", "surface1")] + bar_row("MEM", 41, "blue", 0) + [sp("  │   ", "surface1"), sp("│ ", "surface1"), sp("Agents    ", "subtext"), sp("........  ", "surface1"), sp("3", "green"), sp("   │", "surface1")],
-        [sp("│ ", "surface1")] + bar_row("GPU", 18, "teal", 0) + [sp("  │   ", "surface1"), sp("│ ", "surface1"), sp("Repos     ", "subtext"), sp("........  ", "surface1"), sp("9", "green"), sp("   │", "surface1")],
-        [sp("│ ", "surface1"), sp("NET ", "subtext"), sp("↓1.2 ", "green"), sp("↑0.3 MB/s", "peach"), sp("            │   ", "surface1"), sp("│ ", "surface1"), sp("Queue     ", "subtext"), sp("........  ", "surface1"), sp("2", "yellow"), sp("   │", "surface1")],
-        [sp("╰──────────────────────────────────╯   ╰────────────────────────╯", "surface1")],
-        [sp("╭─ ", "surface1"), sp("ENGINES", "mauve"), sp(" ─────────────────────────╮   ", "surface1"), sp("╭─ ", "surface1"), sp("INTEL", "red"), sp(" ─────────────────╮", "surface1")],
-        [sp("│ ", "surface1"), sp("Compiler ", "subtext")] + [sp("████████████████", "green")] + [sp(" 96.5%", "text"), sp("       │   ", "surface1"), sp("│ ", "surface1"), sp("Threat  ", "subtext"), sp("OSINT-ALPHA", "red"), sp("   │", "surface1")],
-        [sp("│ ", "surface1"), sp("Dataset  ", "subtext"), sp("......... ", "surface1"), sp("18,910", "text"), sp("      │   ", "surface1"), sp("│ ", "surface1"), sp("Sources ", "subtext"), sp("X·TG·4chan", "peach"), sp("   │", "surface1")],
-        [sp("│ ", "surface1"), sp("Bridge   ", "subtext"), sp("▁▂▃▂▁ ", "teal"), sp("nominal ", "text"), sp("Stellar↔EVM", "peach"), sp(" │   ", "surface1"), sp("│ ", "surface1"), sp("Graph   ", "subtext"), sp("online", "green"), sp("       │", "surface1")],
-        [sp("╰──────────────────────────────────╯   ╰────────────────────────╯", "surface1")],
-    ]
+    # observability (btop) — fixed-width boxes so borders align perfectly
+    LW = 34 + 4  # left box total width
+    def rt(name, val, vc="green"):
+        return [sp(f"{name:<10}", "subtext"), sp("." * 13, "surface1"), sp(f"{val:>3}", vc)]
+    sysbox = sbox("SYSTEM", [
+        bar_row("CPU", 34, "mauve"),
+        bar_row("MEM", 41, "blue"),
+        bar_row("GPU", 18, "teal"),
+        [sp("NET  ", "subtext"), sp("↓ 1.2  ", "green"), sp("↑ 0.3 MB/s", "peach")],
+    ], 34, "mauve")
+    runbox = sbox("RUNTIME", [
+        rt("Services", 9), rt("Agents", 3), rt("Repos", 9), rt("Queue", 2, "yellow"),
+    ], 26, "blue")
+    engbox = sbox("ENGINES", [
+        [sp("Compiler ", "subtext"), sp("█" * 16, "green"), sp(" 96.5%", "text")],
+        [sp("Dataset  ", "subtext"), sp("." * 19, "surface1"), sp("18,910", "text")],
+        [sp("Bridge   ", "subtext"), sp("▁▂▃▂▁ ", "teal"), sp("nominal ", "text"), sp("Stellar↔EVM", "peach")],
+    ], 34, "mauve")
+    intbox = sbox("INTEL", [
+        [sp("Threat   ", "subtext"), sp("OSINT-ALPHA", "red")],
+        [sp("Sources  ", "subtext"), sp("X · TG · 4chan", "peach")],
+        [sp("Graph    ", "subtext"), sp("online", "green")],
+    ], 26, "red")
+    ob = sbs(sysbox, runbox, LW) + [[sp(" ", "base")]] + sbs(engbox, intbox, LW)
     out["observability"] = terminal("abhinav@indra-os : btop", ob, cursor=False, accent="mauve")
 
     # tmux journalctl pane
@@ -242,6 +277,39 @@ def build():
     ]
     out["gitlog"] = terminal("indra-os ~ git", gl, cursor=True)
 
+    # service internals (replaces the old gray details code block)
+    def hdr(name, target):
+        return [sp("● ", "green"), sp(f"{name:<22}", "mauve"), sp("→  ", "overlay"), sp(target, "blue")]
+    def sub(label, val, vc="text"):
+        return [sp("    " + f"{label:<8}", "subtext"), sp(val, vc)]
+    intern = [
+        hdr("vedicmind.service", "ved-project"),
+        sub("stack", "Next.js 14 · FastAPI · PostgreSQL + pgvector · Gemini Flash"),
+        sub("engine", "rule-based compiler · Finite State Automata · Pratishakhya"),
+        sub("data", "18,910 samples · 96.5% meter-detection accuracy", "green"),
+        sub("pipe", "text ▸ normalize ▸ Pratishakhya ▸ FSA ▸ meter ▸ RAG ▸ API", "peach"),
+        [sp(" ", "base")],
+        hdr("orchestrator.service", "indra-os"),
+        sub("role", "mission control · routes tasks to claude / codex / gemini,"),
+        sub("", "owns the terminal workspace + knowledge graph."),
+        [sp(" ", "base")],
+        hdr("intel.service", "xint"),
+        [sp("● ", "green"), sp(f"{'telegram.service':<22}", "mauve"), sp("→  ", "overlay"), sp("telint", "blue")],
+        [sp("● ", "green"), sp(f"{'tripcode.service':<22}", "mauve"), sp("→  ", "overlay"), sp("yotsuba-intel", "blue")],
+        sub("↳", "all three feed one OSINT graph  (X · Telegram · 4chan)", "subtext"),
+        [sp(" ", "base")],
+        hdr("bridge.service", "Cross-Chain-Intent-Bridge-Protocol"),
+        sub("", "Stellar ↔ EVM · intent · asset lock · settlement · state sync", "peach"),
+        [sp(" ", "base")],
+        hdr("market.service", "stock-intelligence"),
+        sub("", "Bayesian agent council · NSE · serverless Cloud Functions"),
+        hdr("tray.service", "gptray"),
+        sub("", "desktop system-tray LLM daemon + notifications"),
+        hdr("cron.service", "github-ai-updates"),
+        sub("", "scheduled GitHub polling · dependency monitoring"),
+    ]
+    out["internals"] = terminal("abhinav@indra-os : systemctl cat", intern, cursor=False)
+
     out["waybar"] = waybar()
     return out
 
@@ -251,7 +319,11 @@ def main():
     root = os.path.dirname(here)
     adir = os.path.join(root, "assets")
     os.makedirs(adir, exist_ok=True)
-    panels = build()
+    # Lean profile: only the two panels that carry the rice signal are shipped.
+    # build() still defines the rest (boot/services/btop/tmux/internals) — add a
+    # name here to re-enable a panel.
+    KEEP = {"waybar", "fastfetch"}
+    panels = {k: v for k, v in build().items() if k in KEEP}
     for name, svg in panels.items():
         p = os.path.join(adir, f"{name}.svg")
         with open(p, "w", encoding="utf-8") as f:
