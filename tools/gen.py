@@ -183,13 +183,22 @@ def tmux_session():
     for i, ln in enumerate(sysc):        # systemctl: full width, rows 13..24
         body.append(txt(ln, 1, 13 + i))
 
-    # ── vector diamond in the fastfetch pane ──────────────────────────────
-    cx, cy, rx, ry, g = colx(9), rowy(6) - 4, 64, 118, 10
-    dia = lambda sx, sy: f"{cx:.0f},{cy-sy:.0f} {cx+sx:.0f},{cy:.0f} {cx:.0f},{cy+sy:.0f} {cx-sx:.0f},{cy:.0f}"
-    diamond = (f'<polygon points="{dia(rx, ry)}" fill="{C["mauve"]}"/>'
-               f'<polygon points="{dia(rx*0.6, ry*0.6)}" fill="{C["base"]}"/>'
-               f'<rect x="{cx-g:.0f}" y="{cy-g:.0f}" width="{g*2}" height="{g*2}" rx="2" '
-               f'fill="{C["teal"]}" transform="rotate(45 {cx:.0f} {cy:.0f})"/>')
+    # ── Arch Linux logo in the fastfetch pane (indra-os is arch-based) ────
+    ax = colx(9)                       # centre x
+    a_top = rowy(1) - 10               # apex
+    a_bot = rowy(10) + 6               # base
+    def archpts(bw, nw, nd, apex_dy=0):
+        t, b = a_top + apex_dy, a_bot
+        return (f"{ax:.0f},{t:.0f} {ax-bw:.0f},{b:.0f} {ax-nw:.0f},{b:.0f} "
+                f"{ax:.0f},{b-nd:.0f} {ax+nw:.0f},{b:.0f} {ax+bw:.0f},{b:.0f}")
+    diamond = (
+        '<defs><linearGradient id="arch" x1="0" y1="0" x2="0" y2="1">'
+        f'<stop offset="0" stop-color="{C["lavender"]}"/>'
+        f'<stop offset="1" stop-color="{C["mauve"]}"/></linearGradient></defs>'
+        # outer mountain, then an inner base-coloured cut to give the classic outline
+        f'<polygon points="{archpts(82, 22, 50)}" fill="url(#arch)"/>'
+        f'<polygon points="{archpts(50, 12, 30, apex_dy=34)}" fill="{C["base"]}" fill-opacity="0.28"/>'
+    )
 
     # ── pane split lines ──────────────────────────────────────────────────
     y_vtop = top + 2
@@ -204,7 +213,8 @@ def tmux_session():
     )
 
     # ── tmux status bar ───────────────────────────────────────────────────
-    H = int(y_hbar + 13 * LH + 14 + STATUS)
+    CAVA_H = 74
+    H = int(y_hbar + 13 * LH + 14 + CAVA_H + STATUS)
     sb_y = H - STATUS - 6
     windows = "0:fastfetch  1:boot  2:git  3:systemctl"
     clock = "indra-os  14:22"
@@ -218,6 +228,30 @@ def tmux_session():
 
     dots = "".join(f'<circle cx="{22+k*20}" cy="{BAR/2:.0f}" r="6" fill="{col}"/>'
                    for k, col in enumerate([C['red'], C['yellow'], C['green']]))
+
+    # ── cava audio-spectrum pane (SMIL-animated bars) above the status bar ──
+    cx0, cx1 = colx(1) + 2, W - 16
+    by, MH, barw, gapw = sb_y - 16, 40, 9, 5
+    FR = [0.22, 0.6, 0.4, 0.9, 0.55, 0.3, 0.78, 0.5, 0.86, 0.34, 0.7, 0.46, 0.95, 0.4, 0.66]
+    pal = [C['mauve'], C['blue'], C['sapphire'], C['teal'], C['green'], C['lavender']]
+    nbars = int((cx1 - cx0) // (barw + gapw))
+    bars = []
+    for i in range(nbars):
+        seq = [FR[(i * 2 + k * 3) % len(FR)] for k in range(6)]
+        seq.append(seq[0])                                   # loop back smoothly
+        hs = [max(4, round(MH * f)) for f in seq]
+        vh = ";".join(str(h) for h in hs)
+        vy = ";".join(str(by - h) for h in hs)
+        dur = 0.7 + (i % 5) * 0.13
+        x = cx0 + i * (barw + gapw)
+        bars.append(
+            f'<rect x="{x:.0f}" y="{by-hs[0]}" width="{barw}" height="{hs[0]}" rx="2" '
+            f'fill="{pal[i % len(pal)]}" fill-opacity="0.92">'
+            f'<animate attributeName="height" values="{vh}" dur="{dur:.2f}s" repeatCount="indefinite"/>'
+            f'<animate attributeName="y" values="{vy}" dur="{dur:.2f}s" repeatCount="indefinite"/></rect>')
+    cava = (f'<text x="{cx0:.0f}" y="{by-MH-4:.0f}" xml:space="preserve" fill="{C["mauve"]}">4:cava</text>'
+            f'<text x="{cx0+66:.0f}" y="{by-MH-4:.0f}" xml:space="preserve" fill="{O}">─ audio spectrum</text>'
+            + "".join(bars))
 
     # ── compose the desktop: wallpaper + YASB bar + frosted floating terminal ──
     M, GAP, BARH = 28, 18, 56
@@ -245,7 +279,7 @@ def tmux_session():
         f'<path d="M0.5 12.5 A12 12 0 0 1 12.5 0.5 H{W-12.5} A12 12 0 0 1 {W-0.5} 12.5 V{BAR} H0.5 Z" fill="{C["mantle"]}" fill-opacity="0.66"/>'
         f'<line x1="0.5" y1="{BAR}" x2="{W-0.5}" y2="{BAR}" stroke="{C["surface0"]}"/>'
         f'{dots}<text x="{W/2:.0f}" y="{BAR/2+4:.0f}" text-anchor="middle" class="ttl">abhinav@indra-os — tmux</text>'
-        f'{diamond}{lines}{"".join(body)}{sbar}'
+        f'{diamond}{lines}{"".join(body)}{cava}{sbar}'
     )
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W2}" height="{H2}" viewBox="0 0 {W2} {H2}" role="img">
 <style>text{{font-family:{FONT};font-size:{FS}px;font-variant-ligatures:none;white-space:pre;}} .ttl{{font-size:13px;fill:{C['subtext']};}}</style>
