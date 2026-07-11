@@ -233,6 +233,51 @@ def tmux_session():
 </svg>'''
 
 
+def yasb_bar():
+    """YASB-style top status bar (the header): identity + workspaces + widgets."""
+    W, H = 920, 56
+    CR, ST, TX = C['crust'], C['subtext'], C['text']
+    S0, MA = C['surface0'], C['mauve']
+    y, ph = 12, 32                                    # pill y + height
+    parts = []
+
+    def pill(x, txt, fg, bg, pad=12):
+        w = len(txt) * CW + pad * 2
+        parts.append(
+            f'<rect x="{x:.0f}" y="{y}" width="{w:.0f}" height="{ph}" rx="9" fill="{bg}"/>'
+            f'<text x="{x+pad:.0f}" y="{y+22}" xml:space="preserve" fill="{fg}" font-weight="600">{esc(txt)}</text>')
+        return x + w
+
+    # left cluster: identity + workspaces
+    x = 14
+    x = pill(x, "◆ indra-os", CR, MA) + 10
+    for ws in ("1", "2", "3"):
+        active = ws == "2"
+        w = CW + 20
+        parts.append(
+            f'<rect x="{x:.0f}" y="{y}" width="{w:.0f}" height="{ph}" rx="8" fill="{MA if active else S0}"/>'
+            f'<text x="{x+w/2:.0f}" y="{y+22}" text-anchor="middle" fill="{CR if active else ST}">{ws}</text>')
+        x += w + 6
+
+    # right cluster: widgets, laid out right-to-left
+    widgets = [("CPU 34%", TX, S0), ("MEM 11.2G", TX, S0), ("● 3 agents", CR, C['green']),
+               ("claude-opus", CR, C['blue']), ("main", CR, C['peach']), ("14:22", CR, C['lavender'])]
+    rx = W - 14
+    for txt, fg, bg in reversed(widgets):
+        w = len(txt) * CW + 24
+        rx -= w
+        parts.append(
+            f'<rect x="{rx:.0f}" y="{y}" width="{w:.0f}" height="{ph}" rx="9" fill="{bg}"/>'
+            f'<text x="{rx+12:.0f}" y="{y+22}" xml:space="preserve" fill="{fg}" font-weight="600">{esc(txt)}</text>')
+        rx -= 7
+
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img">
+<style>text{{font-family:{FONT};font-size:{FS}px;white-space:pre;}}</style>
+<rect x="0.5" y="0.5" width="{W-1}" height="{H-1}" rx="14" fill="{C['mantle']}" stroke="{C['surface0']}"/>
+{"".join(parts)}
+</svg>'''
+
+
 def waybar():
     """Horizontal Waybar with colored module pills."""
     mods = [
@@ -449,6 +494,7 @@ def build():
     out["internals"] = terminal("abhinav@indra-os : systemctl cat", intern, cursor=False)
 
     out["waybar"] = waybar()
+    out["yasb"] = yasb_bar()
     out["tmux"] = tmux_session()
     return out
 
@@ -458,7 +504,7 @@ def main():
     root = os.path.dirname(here)
     adir = os.path.join(root, "assets")
     os.makedirs(adir, exist_ok=True)
-    KEEP = {"waybar", "tmux"}      # single-window tmux layout + the waybar strip
+    KEEP = {"yasb", "tmux"}        # YASB header bar + single-window tmux layout
     panels = {k: v for k, v in build().items() if k in KEEP}
     for name, svg in panels.items():
         p = os.path.join(adir, f"{name}.svg")
