@@ -47,8 +47,9 @@ def _line_svg(spans, y):
 
 
 def terminal(title, lines, *, animate=False, min_cols=0, cursor=True,
-             accent="mauve"):
-    """lines: list of list-of-spans. Returns SVG string."""
+             accent="mauve", pre_svg=""):
+    """lines: list of list-of-spans. Returns SVG string.
+    pre_svg: raw SVG drawn in the body area behind the text (e.g. a vector logo)."""
     cols = max([sum(len(t) for t, _ in ln) for ln in lines] + [len(title) + 6, min_cols])
     W = int(cols * CW + PADX * 2)
     H = int(BAR + PADY * 2 + len(lines) * LH)
@@ -100,6 +101,7 @@ def terminal(title, lines, *, animate=False, min_cols=0, cursor=True,
 <line x1="0.5" y1="{BAR}" x2="{W-0.5}" y2="{BAR}" stroke="{C['surface0']}"/>
 {dots}
 <text x="{W/2:.0f}" y="{BAR/2+4:.0f}" text-anchor="middle" class="ttl">{esc(title)}</text>
+{pre_svg}
 {"".join(body)}
 {cur}
 </svg>'''
@@ -190,22 +192,32 @@ def build():
     out["boot"] = terminal("abhinav@indra-os : boot", boot, animate=True)
 
     # fastfetch
-    L = "mauve"; B = "blue"
-    ff = [
-        [sp("          ▟█▙              ", L), sp("abhinav", "green"), sp("@", "text"), sp("indra-os", "mauve")],
-        [sp("        ▟█████▙            ", L), sp("─────────────────────────────────", "surface1")],
-        [sp("      ▟███▛ ▜███▙          ", L), sp("OS        ", "mauve"), sp("indra-os (arch-based) x86_64", "text")],
-        [sp("    ▟███▛  ", L), sp("╭─╮", "teal"), sp("  ▜███▙      ", L), sp("Kernel    ", "mauve"), sp("6.11.0-indra   ", "text"), sp("Uptime ", "mauve"), sp("6d 4h", "text")],
-        [sp("    ▜███▙  ", L), sp("│◆│", "teal"), sp("  ▟███▛      ", L), sp("Shell     ", "mauve"), sp("zsh 5.9 + powerlevel10k", "text")],
-        [sp("      ▜███▙", L), sp("╰─╯", "teal"), sp("▟███▛        ", L), sp("WM        ", "mauve"), sp("Hyprland · Waybar · eww", "text")],
-        [sp("        ▜█████▛            ", L), sp("Terminal  ", "mauve"), sp("foot / alacritty   ", "text"), sp("Editor ", "mauve"), sp("nvim", "text")],
-        [sp("          ▜█▛              ", L), sp("Theme     ", "mauve"), sp("Catppuccin Mocha · ", "text"), sp("Mauve", "mauve")],
-        [sp("                           ", L), sp("─────────────────────────────────", "surface1")],
-        [sp("   ● ● ● ● ● ● ●           ", "pink"), sp("CPU ", "blue"), sp("Detected  ", "text"), sp("GPU ", "blue"), sp("Detected  ", "text"), sp("MEM ", "blue"), sp("11.2/32G", "text")],
-        [sp("   ● ● ● ● ● ● ●           ", "teal"), sp("Python ", "blue"), sp("3.10  ", "text"), sp("Node ", "blue"), sp("20  ", "text"), sp("Docker ", "blue"), sp("27", "text")],
-        [sp("                           ", L), sp("Models  ", "blue"), sp("◆ ", "mauve"), sp("Claude Code  ", "text"), sp("◆ ", "mauve"), sp("Codex  ", "text"), sp("◆ ", "mauve"), sp("Gemini", "text")],
+    PAD = " " * 20                              # clears the vector logo drawn at left
+    info = [
+        [sp("abhinav", "green"), sp("@", "text"), sp("indra-os", "mauve")],
+        [sp("─" * 33, "surface1")],
+        [sp("OS        ", "mauve"), sp("indra-os (arch-based) x86_64", "text")],
+        [sp("Kernel    ", "mauve"), sp("6.11.0-indra   ", "text"), sp("Uptime ", "mauve"), sp("6d 4h", "text")],
+        [sp("Shell     ", "mauve"), sp("zsh 5.9 + powerlevel10k", "text")],
+        [sp("WM        ", "mauve"), sp("Hyprland · Waybar · eww", "text")],
+        [sp("Terminal  ", "mauve"), sp("foot / alacritty   ", "text"), sp("Editor ", "mauve"), sp("nvim", "text")],
+        [sp("Theme     ", "mauve"), sp("Catppuccin Mocha · ", "text"), sp("Mauve", "mauve")],
+        [sp("─" * 33, "surface1")],
+        [sp("CPU ", "blue"), sp("Detected  ", "text"), sp("GPU ", "blue"), sp("Detected  ", "text"), sp("MEM ", "blue"), sp("11.2/32G", "text")],
+        [sp("Python ", "blue"), sp("3.10  ", "text"), sp("Node ", "blue"), sp("20  ", "text"), sp("Docker ", "blue"), sp("27", "text")],
+        [sp("Models  ", "blue"), sp("◆ ", "mauve"), sp("Claude Code  ", "text"), sp("◆ ", "mauve"), sp("Codex  ", "text"), sp("◆ ", "mauve"), sp("Gemini", "text")],
     ]
-    out["fastfetch"] = terminal("abhinav@indra-os : fastfetch", ff, cursor=False)
+    # crisp vector diamond emblem (mauve ring + teal gem), perfectly centred
+    cx, cy, rx, ry, g = 116, 205, 80, 148, 13
+    dia = lambda sx, sy: f"{cx},{cy-sy} {cx+sx},{cy} {cx},{cy+sy} {cx-sx},{cy}"
+    pre = (
+        f'<polygon points="{dia(rx, ry)}" fill="{C["mauve"]}"/>'
+        f'<polygon points="{dia(rx*0.62, ry*0.62)}" fill="{C["base"]}"/>'
+        f'<rect x="{cx-g}" y="{cy-g}" width="{g*2}" height="{g*2}" rx="3" '
+        f'fill="{C["teal"]}" transform="rotate(45 {cx} {cy})"/>'
+    )
+    ff = [[sp(PAD, "base")] + row for row in info]
+    out["fastfetch"] = terminal("abhinav@indra-os : fastfetch", ff, cursor=False, pre_svg=pre)
 
     # services (systemctl)
     def svc(unit, desc, dc="subtext"):

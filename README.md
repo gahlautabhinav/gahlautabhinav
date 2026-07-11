@@ -39,14 +39,6 @@
 </div>
 
 <div align="center">
-<details>
-<summary><code>❯ inspect service internals</code></summary>
-<br/>
-<img src="assets/internals.svg" alt="service internals"/>
-</details>
-</div>
-
-<div align="center">
 
 <img src="https://img.shields.io/badge/Python-3.10-cba6f7?style=flat-square&logo=python&logoColor=1e1e2e&labelColor=1e1e2e"/>
 <img src="https://img.shields.io/badge/TypeScript-89b4fa?style=flat-square&logo=typescript&logoColor=1e1e2e&labelColor=1e1e2e"/>
@@ -60,16 +52,8 @@
 
 <br/><br/>
 
-<!-- observability -->
-<img src="assets/observability.svg" width="100%" alt="observability btop"/>
-
-<br/><br/>
-
-<!-- tmux panes -->
-<table><tr>
-<td><img src="assets/journal.svg" alt="journalctl"/></td>
-<td><img src="assets/gitlog.svg" alt="git log"/></td>
-</tr></table>
+<!-- git log pane -->
+<img src="assets/gitlog.svg" alt="git log"/>
 
 <br/>
 
