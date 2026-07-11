@@ -318,6 +318,46 @@ def _yasb_inner(W, H=56):
     return bg + "".join(parts)
 
 
+def growth_panel():
+    """Tech x business operator panel: real GTM/growth frameworks + a
+    compounding-growth curve. No fabricated metrics — frameworks + concept."""
+    L = [
+        [sp("❯ ", "green"), sp("./growth-engine ", "text"), sp("--status", "overlay")],
+        [sp("─" * 70, "surface1")],
+        [sp("focus    ", "mauve"), sp("AI-native products · automation · agent systems", "text")],
+        [sp("wedge    ", "mauve"), sp("build the tech ", "text"), sp("+", "peach"),
+         sp(" own the growth model", "text"), sp("   (rare combo)", "overlay")],
+        [sp("gtm      ", "mauve"), sp("product-led · founder sales · content & SEO loops", "text")],
+        [sp("funnel   ", "mauve"), sp("acquire ▸ activate ▸ retain ▸ monetize ▸ refer", "blue")],
+        [sp("unit-econ", "mauve"), sp(" CAC · LTV · payback · gross-margin · NDR", "text")],
+        [sp("moats    ", "mauve"), sp("distribution · proprietary data · network effects", "text")],
+        [sp("scale    ", "mauve"), sp("infra ↔ org ↔ market", "text"), sp("   ·  systems, not just code", "overlay")],
+        [sp("─" * 70, "surface1")],
+        [sp("# thesis: ", "overlay"), sp("tech leverage compounds into market leverage", "teal")],
+        [sp(" ", "base")], [sp(" ", "base")], [sp(" ", "base")], [sp(" ", "base")],
+    ]
+    n = len(L)
+    W = int(96 * CW + 2 * PADX)
+    y0 = BAR + PADY + FS
+    base_y = y0 + (n - 1) * LH + 2
+    top_y = base_y - 66
+    x0, x1 = PADX + 8, W - PADX - 8
+    N = 46
+    pts = [(x0 + (x1 - x0) * (i / N), base_y - (base_y - top_y) * ((i / N) ** 2.3)) for i in range(N + 1)]
+    area = f"M{x0:.0f},{base_y:.0f} " + " ".join(f"L{x:.0f},{y:.0f}" for x, y in pts) + f" L{x1:.0f},{base_y:.0f} Z"
+    line = "M" + " L".join(f"{x:.0f},{y:.0f}" for x, y in pts)
+    dots = "".join(
+        f'<circle cx="{x0+(x1-x0)*t:.0f}" cy="{base_y-(base_y-top_y)*(t**2.3):.0f}" r="3.5" fill="{C["blue"]}"/>'
+        for t in (0.25, 0.5, 0.72, 0.88, 1.0))
+    curve = (
+        f'<path d="{area}" fill="{C["mauve"]}" fill-opacity="0.16"/>'
+        f'<path d="{line}" fill="none" stroke="{C["mauve"]}" stroke-width="2.5" stroke-linejoin="round"/>'
+        f'{dots}'
+        f'<text x="{x0}" y="{top_y-8:.0f}" xml:space="preserve" fill="{C["overlay"]}" '
+        f'style="font-size:13px">compounding growth  ·  leverage ▸ distribution ▸ revenue</text>')
+    return terminal("abhinav@indra-os : ~/ventures", L, cursor=False, min_cols=96, pre_svg=curve)
+
+
 def waybar():
     """Horizontal Waybar with colored module pills."""
     mods = [
@@ -534,6 +574,7 @@ def build():
     out["internals"] = terminal("abhinav@indra-os : systemctl cat", intern, cursor=False)
 
     out["desktop"] = tmux_session()   # wallpaper + YASB bar + frosted terminal
+    out["growth"] = growth_panel()    # business x tech operator panel
     return out
 
 
@@ -542,7 +583,7 @@ def main():
     root = os.path.dirname(here)
     adir = os.path.join(root, "assets")
     os.makedirs(adir, exist_ok=True)
-    KEEP = {"desktop"}             # one image: wallpaper + YASB bar + frosted terminal
+    KEEP = {"desktop", "growth"}   # desktop image + business/growth panel
     panels = {k: v for k, v in build().items() if k in KEEP}
     for name, svg in panels.items():
         p = os.path.join(adir, f"{name}.svg")
