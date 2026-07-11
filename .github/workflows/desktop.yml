@@ -1,0 +1,45 @@
+name: live-desktop
+# Refresh the git pane in assets/desktop.svg from real recent commits.
+on:
+  schedule:
+    - cron: "0 */6 * * *"      # every 6 hours
+  workflow_dispatch:            # run manually from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Fetch recent commits (by author, across repos)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -H "Accept: application/vnd.github+json" \
+            "/search/commits?q=author:gahlautabhinav&sort=author-date&order=desc&per_page=8" \
+            --jq '[.items[] | {repo:.repository.name, sha:(.sha[0:7]), msg:(.commit.message|split("\n")[0])}] | .[0:5]' \
+            > tools/recent_commits.json
+          cat tools/recent_commits.json
+
+      - name: Regenerate desktop and commit if changed
+        run: |
+          python tools/gen.py
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/desktop.svg tools/recent_commits.json
+          if git diff --staged --quiet; then
+            echo "no change — nothing to commit"
+            exit 0
+          fi
+          # bump the README cache-buster so GitHub's image proxy re-fetches
+          sed -i -E "s/desktop\.svg\?v=[0-9]+/desktop.svg?v=$(date +%s)/" README.md
+          git add README.md
+          git commit -m "chore: refresh live desktop (recent commits)"
+          git push

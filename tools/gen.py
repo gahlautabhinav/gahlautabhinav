@@ -8,7 +8,19 @@ readme-typing-svg / the contribution snake).
 
 Run:  py -3.10 tools/gen.py      ->  writes assets/*.svg
 """
-import os, html
+import os, html, json
+
+
+def _recent_commits():
+    """Read tools/recent_commits.json (written by the live-desktop Action).
+    Returns a list of {sha,msg} dicts, or None to fall back to sample data."""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recent_commits.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+        return [c for c in data if c.get("msg")][:5] or None
+    except Exception:
+        return None
 
 # ── Catppuccin Mocha palette ───────────────────────────────────────────────
 C = dict(
@@ -148,14 +160,23 @@ def tmux_session():
         [sp("[1.640] ", "overlay"), sp("graph mount ", "text"), sp("··· ", "surface1"), sp("ok", "green")],
         [sp("[2.560] ", "overlay"), sp("bridge S↔EVM ", "peach"), sp("· ", "surface1"), sp("ok", "green")],
     ]
-    git = [
-        title("2:git", 25),
-        [sp("* ", "yellow"), sp("a1f4c22 ", "peach"), sp("route → gemini", "text")],
-        [sp("* ", "yellow"), sp("7d90b1e ", "peach"), sp("meter acc 96.5%", "text")],
-        [sp("* ", "yellow"), sp("3c1aa87 ", "peach"), sp("harden bridge", "text")],
-        [sp("* ", "yellow"), sp("55e02fd ", "peach"), sp("merge intel", "text")],
-        [sp("* ", "yellow"), sp("e9b7740 ", "peach"), sp("NSE serverless", "text")],
-    ]
+    rc = _recent_commits()
+    if rc:                                              # live: real recent commits
+        git = [title("2:git", 25)]
+        for c in rc:
+            sha = (c.get("sha") or "").strip()[:7]
+            msg = " ".join((c.get("msg") or "").split())
+            msg = (msg[:26] + "…") if len(msg) > 27 else msg
+            git.append([sp("* ", "yellow"), sp(f"{sha} ", "peach"), sp(msg, "text")])
+    else:                                               # fallback sample
+        git = [
+            title("2:git", 25),
+            [sp("* ", "yellow"), sp("a1f4c22 ", "peach"), sp("route → gemini", "text")],
+            [sp("* ", "yellow"), sp("7d90b1e ", "peach"), sp("meter acc 96.5%", "text")],
+            [sp("* ", "yellow"), sp("3c1aa87 ", "peach"), sp("harden bridge", "text")],
+            [sp("* ", "yellow"), sp("55e02fd ", "peach"), sp("merge intel", "text")],
+            [sp("* ", "yellow"), sp("e9b7740 ", "peach"), sp("NSE serverless", "text")],
+        ]
     def svc(u, d):
         return [sp("● ", "green"), sp(f"{u:<21}", "mauve"), sp("loaded ", "overlay"),
                 sp("active ", "green"), sp("running  ", "green"), sp(d, "subtext")]
@@ -183,29 +204,14 @@ def tmux_session():
     for i, ln in enumerate(sysc):        # systemctl: full width, rows 13..24
         body.append(txt(ln, 1, 13 + i))
 
-    # ── indra-os ASCII diamond logo (distro-logo style, box-drawing diagonals) ──
-    half, LHL = 6, 18                  # tight line height so the ╱╲ edges connect
-    lx, ly0 = colx(2), rowy(1) + 2
-    W_ = 2 * half + 2
-    specs = ([('╱', half - r, '╲', half + r + 1) for r in range(half + 1)]
-             + [('╲', k, '╱', 2 * half + 1 - k) for k in range(1, half + 1)])
-    dlines = []
-    for i, (lc, lcol, rc, rcol) in enumerate(specs):
-        row = [' '] * W_
-        row[lcol], row[rcol] = lc, rc
-        if i == half:                                  # gem on the widest (middle) row
-            row[(lcol + rcol) // 2] = '◆'
-        s = "".join(row).rstrip()
-        y = ly0 + i * LHL
-        if '◆' in s:
-            gi = s.index('◆')
-            spans = (f'<tspan fill="{C["mauve"]}">{esc(s[:gi])}</tspan>'
-                     f'<tspan fill="{C["teal"]}">◆</tspan>'
-                     f'<tspan fill="{C["mauve"]}">{esc(s[gi+1:])}</tspan>')
-        else:
-            spans = f'<tspan fill="{C["mauve"]}">{esc(s)}</tspan>'
-        dlines.append(f'<text x="{lx:.0f}" y="{y:.0f}" xml:space="preserve">{spans}</text>')
-    diamond = "".join(dlines)
+    # ── indra-os diamond emblem (vector: renders everywhere, no font needed) ──
+    cx, cy, rx, ry, g = colx(9), rowy(6) - 4, 64, 118, 11
+    dia = lambda sx, sy: f"{cx:.0f},{cy-sy:.0f} {cx+sx:.0f},{cy:.0f} {cx:.0f},{cy+sy:.0f} {cx-sx:.0f},{cy:.0f}"
+    diamond = (
+        f'<polygon points="{dia(rx, ry)}" fill="none" stroke="{C["mauve"]}" stroke-width="9" stroke-linejoin="round"/>'
+        f'<polygon points="{dia(rx*0.42, ry*0.42)}" fill="{C["mauve"]}" fill-opacity="0.18"/>'
+        f'<rect x="{cx-g:.0f}" y="{cy-g:.0f}" width="{g*2}" height="{g*2}" rx="2" '
+        f'fill="{C["teal"]}" transform="rotate(45 {cx:.0f} {cy:.0f})"/>')
 
     # ── pane split lines ──────────────────────────────────────────────────
     y_vtop = top + 2
@@ -220,8 +226,7 @@ def tmux_session():
     )
 
     # ── tmux status bar ───────────────────────────────────────────────────
-    CAVA_H = 74
-    H = int(y_hbar + 13 * LH + 14 + CAVA_H + STATUS)
+    H = int(y_hbar + 13 * LH + 14 + STATUS)
     sb_y = H - STATUS - 6
     windows = "0:fastfetch  1:boot  2:git  3:systemctl"
     clock = "indra-os  14:22"
@@ -235,30 +240,6 @@ def tmux_session():
 
     dots = "".join(f'<circle cx="{22+k*20}" cy="{BAR/2:.0f}" r="6" fill="{col}"/>'
                    for k, col in enumerate([C['red'], C['yellow'], C['green']]))
-
-    # ── cava audio-spectrum pane (SMIL-animated bars) above the status bar ──
-    cx0, cx1 = colx(1) + 2, W - 16
-    by, MH, barw, gapw = sb_y - 16, 40, 9, 5
-    FR = [0.22, 0.6, 0.4, 0.9, 0.55, 0.3, 0.78, 0.5, 0.86, 0.34, 0.7, 0.46, 0.95, 0.4, 0.66]
-    pal = [C['mauve'], C['blue'], C['sapphire'], C['teal'], C['green'], C['lavender']]
-    nbars = int((cx1 - cx0) // (barw + gapw))
-    bars = []
-    for i in range(nbars):
-        seq = [FR[(i * 2 + k * 3) % len(FR)] for k in range(6)]
-        seq.append(seq[0])                                   # loop back smoothly
-        hs = [max(4, round(MH * f)) for f in seq]
-        vh = ";".join(str(h) for h in hs)
-        vy = ";".join(str(by - h) for h in hs)
-        dur = 0.7 + (i % 5) * 0.13
-        x = cx0 + i * (barw + gapw)
-        bars.append(
-            f'<rect x="{x:.0f}" y="{by-hs[0]}" width="{barw}" height="{hs[0]}" rx="2" '
-            f'fill="{pal[i % len(pal)]}" fill-opacity="0.92">'
-            f'<animate attributeName="height" values="{vh}" dur="{dur:.2f}s" repeatCount="indefinite"/>'
-            f'<animate attributeName="y" values="{vy}" dur="{dur:.2f}s" repeatCount="indefinite"/></rect>')
-    cava = (f'<text x="{cx0:.0f}" y="{by-MH-4:.0f}" xml:space="preserve" fill="{C["mauve"]}">4:cava</text>'
-            f'<text x="{cx0+66:.0f}" y="{by-MH-4:.0f}" xml:space="preserve" fill="{O}">─ audio spectrum</text>'
-            + "".join(bars))
 
     # ── compose the desktop: wallpaper + YASB bar + frosted floating terminal ──
     M, GAP, BARH = 28, 18, 56
@@ -286,7 +267,7 @@ def tmux_session():
         f'<path d="M0.5 12.5 A12 12 0 0 1 12.5 0.5 H{W-12.5} A12 12 0 0 1 {W-0.5} 12.5 V{BAR} H0.5 Z" fill="{C["mantle"]}" fill-opacity="0.66"/>'
         f'<line x1="0.5" y1="{BAR}" x2="{W-0.5}" y2="{BAR}" stroke="{C["surface0"]}"/>'
         f'{dots}<text x="{W/2:.0f}" y="{BAR/2+4:.0f}" text-anchor="middle" class="ttl">abhinav@indra-os — tmux</text>'
-        f'{diamond}{lines}{"".join(body)}{cava}{sbar}'
+        f'{diamond}{lines}{"".join(body)}{sbar}'
     )
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W2}" height="{H2}" viewBox="0 0 {W2} {H2}" role="img">
 <style>text{{font-family:{FONT};font-size:{FS}px;font-variant-ligatures:none;white-space:pre;}} .ttl{{font-size:13px;fill:{C['subtext']};}}</style>
