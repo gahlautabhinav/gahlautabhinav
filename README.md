@@ -4,7 +4,7 @@
 
 <div align="center">
 
-<img src="assets/desktop.svg?v=1790564343" width="100%" alt="indra-os — Hyprland desktop"/>
+<img src="assets/desktop.svg?v=1790635811" width="100%" alt="indra-os — Hyprland desktop"/>
 
 <br/>
 
