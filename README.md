@@ -8,8 +8,8 @@
 
 <br/>
 
-<!-- business x tech operator panel: GTM/growth frameworks + compounding curve -->
-<img src="assets/growth.svg?v=2" width="100%" alt="growth-engine — business x tech operator"/>
+<!-- operator stack: Business · AI · Quant · Economics · GTM  (radar: now vs trajectory) -->
+<img src="assets/stack.svg?v=1" width="100%" alt="operator stack — Business · AI · Quant · Economics · GTM"/>
 
 
 </div>

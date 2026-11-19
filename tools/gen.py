@@ -173,7 +173,7 @@ def tmux_session():
         [sp("OS    ", "mauve"), sp("arch-based x86_64", "text")],
         [sp("WM    ", "mauve"), sp("Hyprland · Waybar", "text")],
         [sp("SHELL ", "mauve"), sp("zsh + powerlevel10k", "text")],
-        [sp("EDIT  ", "mauve"), sp("nvim · foot", "text")],
+        [sp("ROLE  ", "mauve"), sp("AI·Biz·Quant·Econ·GTM", "text")],
         [sp("THEME ", "mauve"), sp("Catppuccin Mauve", "text")],
         [sp("─" * 28, "surface1")],
         [sp("CPU ", "blue"), sp("Detected  ", "text"), sp("MEM ", "blue"), sp("11/32G", "text")],
@@ -327,44 +327,74 @@ def _yasb_inner(W, H=56):
     return bg + "".join(parts)
 
 
-def growth_panel():
-    """Tech x business operator panel: real GTM/growth frameworks + a
-    compounding-growth curve. No fabricated metrics — frameworks + concept."""
-    L = [
-        [sp("❯ ", "green"), sp("./growth-engine ", "text"), sp("--status", "overlay")],
-        [sp("─" * 70, "surface1")],
-        [sp("focus    ", "mauve"), sp("AI-native products · automation · agent systems", "text")],
-        [sp("wedge    ", "mauve"), sp("build the tech ", "text"), sp("+", "peach"),
-         sp(" own the growth model", "text"), sp("   (rare combo)", "overlay")],
-        [sp("gtm      ", "mauve"), sp("product-led · founder sales · content & SEO loops", "text")],
-        [sp("funnel   ", "mauve"), sp("acquire ▸ activate ▸ retain ▸ monetize ▸ refer", "blue")],
-        [sp("unit-econ", "mauve"), sp(" CAC · LTV · payback · gross-margin · NDR", "text")],
-        [sp("moats    ", "mauve"), sp("distribution · proprietary data · network effects", "text")],
-        [sp("scale    ", "mauve"), sp("infra ↔ org ↔ market", "text"), sp("   ·  systems, not just code", "overlay")],
-        [sp("─" * 70, "surface1")],
-        [sp("# thesis: ", "overlay"), sp("tech leverage compounds into market leverage", "teal")],
-        [sp(" ", "base")], [sp(" ", "base")], [sp(" ", "base")], [sp(" ", "base")],
+def stack_panel():
+    """Five-discipline operator panel: Business · AI · Quant · Economics · GTM.
+    Left: the stack as a terminal listing. Right: a radar of the profile shape
+    (solid = now, dashed = trajectory). Shape only, no fabricated numbers."""
+    # (name, color, focus, status) — order = clockwise around the radar from top
+    D = [
+        ("AI",        "mauve", "agent systems · RAG · LLMOps",    "active"),
+        ("Business",  "blue",  "strategy · ops · unit economics", "active"),
+        ("GTM",       "peach", "PLG · founder sales · SEO loops", "active"),
+        ("Economics", "green", "incentives · markets · macro",    "active"),
+        ("Quant",     "yellow", "stats · time-series · backtests", "ramping"),
     ]
-    n = len(L)
-    W = int(96 * CW + 2 * PADX)
-    y0 = BAR + PADY + FS
-    base_y = y0 + (n - 1) * LH + 2
-    top_y = base_y - 66
-    x0, x1 = PADX + 8, W - PADX - 8
-    N = 46
-    pts = [(x0 + (x1 - x0) * (i / N), base_y - (base_y - top_y) * ((i / N) ** 2.3)) for i in range(N + 1)]
-    area = f"M{x0:.0f},{base_y:.0f} " + " ".join(f"L{x:.0f},{y:.0f}" for x, y in pts) + f" L{x1:.0f},{base_y:.0f} Z"
-    line = "M" + " L".join(f"{x:.0f},{y:.0f}" for x, y in pts)
-    dots = "".join(
-        f'<circle cx="{x0+(x1-x0)*t:.0f}" cy="{base_y-(base_y-top_y)*(t**2.3):.0f}" r="3.5" fill="{C["blue"]}"/>'
-        for t in (0.25, 0.5, 0.72, 0.88, 1.0))
-    curve = (
-        f'<path d="{area}" fill="{C["mauve"]}" fill-opacity="0.16"/>'
-        f'<path d="{line}" fill="none" stroke="{C["mauve"]}" stroke-width="2.5" stroke-linejoin="round"/>'
-        f'{dots}'
-        f'<text x="{x0}" y="{top_y-8:.0f}" xml:space="preserve" fill="{C["overlay"]}" '
-        f'style="font-size:13px">compounding growth  ·  leverage ▸ distribution ▸ revenue</text>')
-    return terminal("abhinav@indra-os : ~/ventures", L, cursor=False, min_cols=96, pre_svg=curve, frosted=True)
+    now  = [0.92, 0.84, 0.80, 0.74, 0.42]   # ponytail: self-assessed shape, edit freely
+    goal = [0.92, 0.84, 0.80, 0.82, 0.88]   # dashed trajectory (quant + econ growing)
+
+    def row(name, col, focus, status):
+        tag = [sp("● ", "green"), sp("active", "subtext")] if status == "active" \
+            else [sp("▲ ", "yellow"), sp("ramping", "yellow")]
+        return [sp("◆ ", col), sp(f"{name:<11}", col), sp(f"{focus:<33}", "text")] + tag
+
+    L = [
+        [sp("❯ ", "green"), sp("./operator ", "text"), sp("--stack", "overlay")],
+        [sp("─" * 56, "surface1")],
+        *[row(*d) for d in D],
+        [sp("─" * 56, "surface1")],
+        [sp("loop  ", "overlay"), sp("understand", "green"), sp(" ▸ ", "overlay"), sp("model", "yellow"),
+         sp(" ▸ ", "overlay"), sp("build", "mauve"), sp(" ▸ ", "overlay"), sp("sell", "peach"),
+         sp(" ▸ ", "overlay"), sp("scale", "blue")],
+        [sp(" ", "base")],
+        [sp("─" * 94, "surface1")],
+        [sp("# thesis: ", "overlay"),
+         sp("markets are systems — model them, then build and sell into them", "teal")],
+    ]
+
+    # ── radar (pentagon) ──────────────────────────────────────────────────
+    import math
+    cx, cy, R = 728, 170, 98
+    ang = [math.radians(-90 + 72 * i) for i in range(5)]
+    pt = lambda i, r: (cx + R * r * math.cos(ang[i]), cy + R * r * math.sin(ang[i]))
+    poly = lambda vals: " ".join(f"{x:.1f},{y:.1f}" for x, y in (pt(i, v) for i, v in enumerate(vals)))
+    S1, OV = C["surface1"], C["overlay"]
+    grid = "".join(f'<polygon points="{poly([k] * 5)}" fill="none" stroke="{S1}" stroke-width="1"/>'
+                   for k in (0.33, 0.66, 1.0))
+    spokes = "".join(f'<line x1="{cx}" y1="{cy}" x2="{pt(i, 1)[0]:.1f}" y2="{pt(i, 1)[1]:.1f}" stroke="{S1}"/>'
+                     for i in range(5))
+    shape = (f'<polygon points="{poly(goal)}" fill="none" stroke="{C["yellow"]}" stroke-width="1.6" '
+             f'stroke-dasharray="5 4" class="traj"/>'
+             f'<polygon points="{poly(now)}" fill="{C["mauve"]}" fill-opacity="0.22" '
+             f'stroke="{C["mauve"]}" stroke-width="2.2" stroke-linejoin="round"/>')
+    dots = "".join(f'<circle cx="{pt(i, v)[0]:.1f}" cy="{pt(i, v)[1]:.1f}" r="4" fill="{C[D[i][1]]}"/>'
+                   for i, v in enumerate(now))
+    qx, qy = pt(4, goal[4])
+    dots += f'<circle cx="{qx:.1f}" cy="{qy:.1f}" r="4" fill="{C["yellow"]}" class="pulse"/>'
+    # axis labels, pushed out past the rim and anchored away from the centre
+    labels = []
+    for i, (name, col, _, _) in enumerate(D):
+        x, y = pt(i, 1.17)
+        c = math.cos(ang[i])
+        anchor = "middle" if abs(c) < 0.2 else ("start" if c > 0 else "end")
+        dy = -4 if i == 0 else (14 if math.sin(ang[i]) > 0.5 else 5)
+        labels.append(f'<text x="{x:.1f}" y="{y + dy:.1f}" text-anchor="{anchor}" fill="{C[col]}" '
+                      f'style="font-size:13.5px;font-weight:600">{name}</text>')
+    legend = (f'<text x="{cx}" y="{cy + R + 28}" text-anchor="middle" fill="{OV}" style="font-size:12.5px">'
+              f'━ now   ┅ trajectory</text>')
+    css = ('<style>.traj{animation:dash 6s linear infinite}@keyframes dash{to{stroke-dashoffset:-90}}'
+           '.pulse{animation:pl 1.6s ease-in-out infinite}@keyframes pl{50%{opacity:.25}}</style>')
+    radar = css + grid + spokes + shape + dots + "".join(labels) + legend
+    return terminal("abhinav@indra-os : ~/stack", L, cursor=False, min_cols=96, pre_svg=radar, frosted=True)
 
 
 def waybar():
@@ -583,7 +613,7 @@ def build():
     out["internals"] = terminal("abhinav@indra-os : systemctl cat", intern, cursor=False)
 
     out["desktop"] = tmux_session()   # wallpaper + YASB bar + frosted terminal
-    out["growth"] = growth_panel()    # business x tech operator panel
+    out["stack"] = stack_panel()      # Business · AI · Quant · Economics · GTM
     return out
 
 
@@ -592,7 +622,7 @@ def main():
     root = os.path.dirname(here)
     adir = os.path.join(root, "assets")
     os.makedirs(adir, exist_ok=True)
-    KEEP = {"desktop", "growth"}   # desktop image + business/growth panel
+    KEEP = {"desktop", "stack"}    # desktop image + discipline-stack panel
     panels = {k: v for k, v in build().items() if k in KEEP}
     for name, svg in panels.items():
         p = os.path.join(adir, f"{name}.svg")
