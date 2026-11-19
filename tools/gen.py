@@ -8,7 +8,10 @@ Live parts (refreshed every 6h by .github/workflows/desktop.yml):
   - AI pane    real recent commits      tools/recent_commits.json (written by the Action)
   - Quant pane NIFTY candles + signals  } Yahoo chart API, cached to tools/markets.json
   - Econ pane  US yield curve + macro   } so a failed fetch falls back to the last good data
-  - Fin pane   NVIDIA latest 10-K       SEC EDGAR XBRL, cached to tools/fundamentals.json
+  - Quant pane also: 50/200 SMA backtest vs buy-and-hold on 5y NIFTY, 10bp costs
+  - Econ pane also: India vs US GDP / CPI / fiscal balance  IMF WEO, cached to tools/macro.json
+  - Fin pane   latest 10-K, rotating daily NVDA→MSFT→GOOGL→META→AMZN  SEC EDGAR XBRL,
+               cached to tools/fundamentals.json
   - Val pane   CAPM → WACC → reverse DCF from live price, 10Y yield and beta
 
 Self-contained SVG, stdlib only. Animations are CSS/SMIL inside the SVG, which
@@ -76,18 +79,26 @@ def recent_commits():
         return []
 
 
+# key -> yahoo symbol, or (symbol, range)
 TICKERS = {
     "nifty": "^NSEI", "spx": "^GSPC", "btc": "BTC-USD", "inr": "INR=X", "gold": "GC=F",
     "oil": "CL=F", "dxy": "DX-Y.NYB",
     "y3m": "^IRX", "y5y": "^FVX", "y10": "^TNX", "y30": "^TYX",   # US Treasury yields
-    "nvda": "NVDA",                                                 # valuation target
+    "nifty5y": ("^NSEI", "5y"),                                     # backtest history
+    "nvda": "NVDA", "msft": "MSFT", "googl": "GOOGL", "meta": "META", "amzn": "AMZN",
 }
 
-# ── fundamentals: SEC EDGAR XBRL (official, free, no key) ───────────────────
-CIK = "0001045810"          # NVIDIA
+# valuation target rotates daily through these (ticker, SEC CIK)
+COMPANIES = [("NVDA", "0001045810"), ("MSFT", "0000789019"), ("GOOGL", "0001652044"),
+             ("META", "0001326801"), ("AMZN", "0001018724")]
 SEC_UA = "indra-os-profile-bot/1.0"
 
 
+def today_company():
+    return COMPANIES[datetime.datetime.now(datetime.timezone.utc).date().toordinal() % len(COMPANIES)]
+
+
+# ── fundamentals: SEC EDGAR XBRL (official, free, no key) ───────────────────
 def _latest(g, tags, instant=False, n=1):
     """Latest 10-K value(s) across candidate us-gaap tags.
     Flows need a ~1-year duration; stocks are point-in-time. Returns [(end, val), ...] newest first."""
@@ -107,38 +118,81 @@ def _latest(g, tags, instant=False, n=1):
     return [(e, best[e][1]) for e in ends]
 
 
-def fundamentals():
-    """Latest-FY statements for CIK, cached to tools/fundamentals.json."""
+def _statements(facts):
+    """Normalise one company's XBRL facts into the fields the panes use.
+    Gross profit and opex are derived (rev - cogs, gp - op inc) so the waterfall always ties."""
+    g = facts["us-gaap"]
+    rev = _latest(g, ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"], n=2)
+    fy = datetime.date.fromisoformat(rev[0][0])
+
+    def one(tags, inst=False, default=None):
+        """Value for the same fiscal year as revenue (±7 days), never a stale older year."""
+        for tag in tags:
+            hit = _latest(g, [tag], inst)
+            if hit and abs((datetime.date.fromisoformat(hit[0][0]) - fy).days) <= 7:
+                return hit[0][1]
+        return default
+    cogs = one(["CostOfRevenue", "CostOfGoodsAndServicesSold"])
+    opinc = one(["OperatingIncomeLoss"])
+    assets = one(["Assets"], True)
+    equity = one(["StockholdersEquity",
+                  "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"], True)
+    liab = one(["Liabilities"], True)
+    cash = one(["CashCashEquivalentsAndShortTermInvestments"], True)
+    if cash is None:
+        cash = (one(["CashAndCashEquivalentsAtCarryingValue",
+                     "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"], True, 0)
+                + one(["MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+                       "ShortTermInvestments",
+                       # ponytail: NVDA FY26 only tags the AFS total, which may double-count
+                       # cash equivalents (~$8B) — immaterial next to a multi-$T market cap
+                       "AvailableForSaleSecuritiesDebtSecurities"], True, 0))
+    sh = facts.get("dei", {}).get("EntityCommonStockSharesOutstanding", {}).get("units", {}).get("shares")
+    if sh:   # cover page: sum every share class on the latest filing
+        last = max(sh, key=lambda v: (v["end"], v.get("filed", "")))
+        shares = sum(v["val"] for v in sh if v.get("accn") == last.get("accn") and v["end"] == last["end"])
+    else:    # GOOGL: balance-sheet total across classes; META: diluted weighted average
+        tag = next(t for t in ("CommonStockSharesOutstanding", "WeightedAverageNumberOfDilutedSharesOutstanding")
+                   if t in g)
+        shares = max(g[tag]["units"]["shares"],
+                     key=lambda v: (v["end"], v.get("start", ""), v.get("filed", "")))["val"]
+    gp = rev[0][1] - cogs
+    return dict(
+        fy_end=rev[0][0], rev=rev[0][1], rev_prev=rev[1][1], cogs=cogs, gp=gp, opex=gp - opinc, opinc=opinc,
+        tax=one(["IncomeTaxExpenseBenefit"]), ni=one(["NetIncomeLoss"]),
+        assets=assets, equity=equity,
+        liab=liab if liab is not None else assets - equity, liab_derived=liab is None,
+        cfo=one(["NetCashProvidedByUsedInOperatingActivities"]),
+        capex=one(["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"]),
+        cash=cash, debt=one(["LongTermDebt", "LongTermDebtNoncurrent"], True, 0), shares=shares)
+
+
+def fundamentals(ticker, cik):
+    """Latest-FY statements for one company; cache keyed by ticker in tools/fundamentals.json."""
     import urllib.request
     p = os.path.join(HERE, "fundamentals.json")
     try:
-        req = urllib.request.Request(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{CIK}.json",
-                                     headers={"User-Agent": SEC_UA})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            facts = json.load(r)["facts"]
-        g = facts["us-gaap"]
-        one = lambda tags, inst=False: _latest(g, tags, inst)[0][1]
-        rev = _latest(g, ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"], n=2)
-        f = dict(
-            fy_end=rev[0][0], rev=rev[0][1], rev_prev=rev[1][1],
-            cogs=one(["CostOfRevenue"]), gp=one(["GrossProfit"]), opex=one(["OperatingExpenses"]),
-            opinc=one(["OperatingIncomeLoss"]), tax=one(["IncomeTaxExpenseBenefit"]), ni=one(["NetIncomeLoss"]),
-            assets=one(["Assets"], True), liab=one(["Liabilities"], True), equity=one(["StockholdersEquity"], True),
-            cfo=one(["NetCashProvidedByUsedInOperatingActivities"]),
-            capex=one(["PaymentsToAcquireProductiveAssets", "PaymentsToAcquirePropertyPlantAndEquipment"]),
-            cash=one(["CashAndCashEquivalentsAtCarryingValue"], True)
-                 + next(iter(_latest(g, ["MarketableSecuritiesCurrent",
-                                         "AvailableForSaleSecuritiesDebtSecuritiesCurrent"], True)), (0, 0))[1],
-            debt=one(["LongTermDebt", "LongTermDebtNoncurrent"], True),
-            shares=facts["dei"]["EntityCommonStockSharesOutstanding"]["units"]["shares"][-1]["val"],
-        )
-        with open(p, "w", encoding="utf-8") as fh:
-            json.dump(f, fh, indent=1)
-        return f
-    except Exception as e:
-        print(f"fundamentals: SEC fetch failed ({e}) — using cache")
         with open(p, encoding="utf-8") as fh:
-            return json.load(fh)
+            cache = json.load(fh)
+        if "rev" in cache:                       # migrate the old single-company format
+            cache = {"NVDA": cache}
+    except Exception:
+        cache = {}
+    try:
+        req = urllib.request.Request(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
+                                     headers={"User-Agent": SEC_UA})
+        with urllib.request.urlopen(req, timeout=40) as r:
+            cache[ticker] = _statements(json.load(r)["facts"])
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(cache, fh, indent=1)
+    except Exception as e:
+        print(f"fundamentals: SEC fetch for {ticker} failed ({e}) — using cache")
+    if ticker in cache:
+        return ticker, cache[ticker]
+    if not cache:
+        raise SystemExit("no fundamentals (live or cached)")
+    t = next(iter(cache))
+    return t, cache[t]
 
 
 def dcf_ev(fcf0, g, w, gT, n=10):
@@ -150,16 +204,17 @@ def dcf_ev(fcf0, g, w, gT, n=10):
     return pv + f * (1 + gT) / (w - gT) / (1 + w) ** n
 
 
-def valuation(f, m, erp=0.05, gT=0.03):
-    """CAPM → WACC → reverse DCF: the 10y FCF growth the current price implies."""
-    px = dict(zip(m["nvda"]["d"], m["nvda"]["c"]))
+def valuation(tk, f, m, erp=0.05, gT=0.03):
+    """CAPM -> WACC -> reverse DCF: the 10y FCF growth the current price implies."""
+    s = m[tk.lower()]
+    px = dict(zip(s["d"], s["c"]))
     sx = dict(zip(m["spx"]["d"], m["spx"]["c"]))
-    days = [d for d in m["nvda"]["d"] if d in sx]
+    days = [d for d in s["d"] if d in sx]
     ra = [math.log(px[b] / px[a]) for a, b in zip(days, days[1:])]
     rb = [math.log(sx[b] / sx[a]) for a, b in zip(days, days[1:])]
     beta = st.covariance(ra, rb) / st.variance(rb)
     rf = m["y10"]["c"][-1] / 100
-    price = m["nvda"]["c"][-1]
+    price = s["c"][-1]
     E, D = price * f["shares"], f["debt"]
     t = f["tax"] / (f["ni"] + f["tax"])
     ke, kd = rf + beta * erp, rf + 0.01
@@ -174,14 +229,15 @@ def valuation(f, m, erp=0.05, gT=0.03):
                                 if ww - gg > 0.01 else None)
     grid = [[per_share(w + dw, gg) for gg in (0.02, 0.03, 0.04)] for dw in (-0.01, 0, 0.01)]
     return dict(beta=beta, rf=rf, ke=ke, w=w, dv=D / (D + E), fcf0=fcf0, g=g, price=price, mcap=E,
-                chg=price / m["nvda"]["c"][-2] - 1, erp=erp, gT=gT, grid=grid, tax=t)
+                ni=f["ni"], capex_heavy=fcf0 < 0.4 * f["ni"],      # capex cycle → trough FCF inflates implied growth
+                chg=price / s["c"][-2] - 1, erp=erp, gT=gT, grid=grid, tax=t)
 
 
-def _fetch(sym):
-    """6 months of daily OHLC for one symbol, keyed by exchange-local date."""
+def _fetch(sym, rng="6mo"):
+    """Daily OHLC for one symbol, keyed by exchange-local date."""
     import urllib.request, urllib.parse
     url = (f"https://query1.finance.yahoo.com/v8/finance/chart/"
-           f"{urllib.parse.quote(sym)}?range=6mo&interval=1d")
+           f"{urllib.parse.quote(sym)}?range={rng}&interval=1d")
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=15) as r:
         res = json.load(r)["chart"]["result"][0]
@@ -206,9 +262,10 @@ def markets():
     except Exception:
         data = {}
     fresh = False
-    for key, sym in TICKERS.items():
+    for key, spec in TICKERS.items():
+        sym, rng = spec if isinstance(spec, tuple) else (spec, "6mo")
         try:
-            data[key] = _fetch(sym)
+            data[key] = _fetch(sym, rng)
             fresh = True
         except Exception as e:
             print(f"markets: {sym} fetch failed ({e}) — using cache")
@@ -221,6 +278,59 @@ def markets():
     if missing:
         raise SystemExit(f"no market data (live or cached) for: {missing}")
     return data
+
+
+# ── macro: IMF World Economic Outlook (DataMapper API, free, no key) ────────
+IMF = {"gdp": "NGDP_RPCH", "cpi": "PCPIPCH", "fiscal": "GGXCNL_NGDP"}   # real GDP %, inflation %, net lending % GDP
+
+
+def macro():
+    """India vs US for the current year from the IMF WEO; cached to tools/macro.json."""
+    import urllib.request
+    p = os.path.join(HERE, "macro.json")
+    year = str(datetime.datetime.now(datetime.timezone.utc).year)
+    try:
+        out = {"year": year}
+        for k, ind in IMF.items():
+            req = urllib.request.Request(f"https://www.imf.org/external/datamapper/api/v1/{ind}/IND/USA",
+                                         headers={"User-Agent": SEC_UA})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                vals = json.load(r)["values"][ind]
+            for c in ("IND", "USA"):
+                series = {y: v for y, v in vals[c].items() if v is not None and y <= year}
+                out[f"{c}_{k}"] = series[max(series)]
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(out, fh, indent=1)
+        return out
+    except Exception as e:
+        print(f"macro: IMF fetch failed ({e}) — using cache")
+        with open(p, encoding="utf-8") as fh:
+            return json.load(fh)
+
+
+def backtest(c, fast=50, slow=200, cost=0.001):
+    """Long/flat 50/200 SMA crossover vs buy-and-hold. Signal at close t, position held t->t+1
+    (no look-ahead); `cost` charged on every position change. Cash earns 0."""
+    rs, rh, pos, trades, held = [], [], 0, 0, 0
+    for t in range(slow - 1, len(c) - 1):
+        want = 1 if sum(c[t - fast + 1:t + 1]) / fast > sum(c[t - slow + 1:t + 1]) / slow else 0
+        cst = cost if want != pos else 0.0
+        trades += want != pos
+        pos = want
+        held += pos
+        r = c[t + 1] / c[t] - 1
+        rs.append(pos * r - cst)
+        rh.append(r)
+
+    def stats(rets):
+        eq, peak, mdd = [1.0], 1.0, 0.0
+        for r in rets:
+            eq.append(eq[-1] * (1 + r))
+            peak = max(peak, eq[-1])
+            mdd = min(mdd, eq[-1] / peak - 1)
+        return dict(eq=eq, cagr=eq[-1] ** (252 / len(rets)) - 1,
+                    sharpe=st.mean(rets) / st.stdev(rets) * math.sqrt(252), mdd=mdd)
+    return dict(strat=stats(rs), hold=stats(rh), trades=trades, exposure=held / len(rs), start=slow - 1)
 
 
 def signals(c):
@@ -339,7 +449,7 @@ def pane_quant(x0, y0, w, m):
            T(x0 + 14, y0 + 42, [("NIFTY 50 ", "mauve"), (f"{sg['last']:,.1f} ", "text"), (a, col)])]
 
     N = 40
-    cx0, cx1, cy0, cy1 = x0 + 14, x0 + w - 54, y0 + 54, y0 + 140
+    cx0, cx1, cy0, cy1 = x0 + 14, x0 + w - 54, y0 + 52, y0 + 108
     o, h, l, c = (nf[k][-N:] for k in "ohlc")
     lo, hi = min(l), max(h)
     pad = (hi - lo) * 0.06
@@ -371,23 +481,37 @@ def pane_quant(x0, y0, w, m):
 
     pct = lambda v: f"{v * 100:+.2f}%"
     out += [
-        T(x0 + 14, y0 + 164, [("mom20 ", "subtext"), (pct(sg["mom20"]), "green" if sg["mom20"] >= 0 else "red"),
-                              ("  vol ", "subtext"), (f"{sg['vol20'] * 100:.1f}%", "text")]),
-        T(x0 + 14, y0 + 183, [("sharpe ", "subtext"), (f"{sg['sharpe']:+.2f}", "yellow"),
-                              ("  maxdd ", "subtext"), (pct(sg["mdd"]), "red")]),
-        T(x0 + 14, y0 + 202, [("z ", "subtext"), (f"{sg['z']:+.2f}σ  ", "teal"), (sg["regime"], "peach")]),
+        T(x0 + 14, y0 + 128, [("mom ", "subtext"), (pct(sg["mom20"]), "green" if sg["mom20"] >= 0 else "red"),
+                              ("  vol ", "subtext"), (f"{sg['vol20'] * 100:.1f}%", "text"),
+                              ("  dd ", "subtext"), (pct(sg["mdd"]), "red")]),
+        T(x0 + 14, y0 + 147, [("SR ", "subtext"), (f"{sg['sharpe']:+.2f}", "yellow"), ("  z ", "subtext"),
+                              (f"{sg['z']:+.2f}σ  ", "teal"), (sg["regime"], "peach")], 12.5),
     ]
-    for i, pair in enumerate(((("spx", "S&P "), ("btc", "  BTC ")), (("gold", "GOLD "), ("inr", "  INR ")))):
-        spans = []
-        for key, lab in pair:
-            cs = m[key]["c"]
-            a2, c2 = arrow(cs[-1] / cs[-2] - 1)
-            spans += [(lab, "subtext"), (a2, c2)]
-        out.append(T(x0 + 14, y0 + 228 + i * LH, spans, 12.5))
+
+    # ── backtest: 50/200 SMA long/flat vs buy-and-hold, 10bp per switch ──
+    n5 = m["nifty5y"]
+    bt = backtest(n5["c"])
+    out.append(T(x0 + 14, y0 + 170, [("backtest ", "mauve"), ("50/200 SMA · 10bp · ", "overlay"),
+                                     (f"{n5['d'][bt['start']][:4]}→now", "overlay")], 12.5))
+    bx0, bx1, by0, by1 = x0 + 14, x0 + w - 14, y0 + 178, y0 + 216
+    es, eh = bt["strat"]["eq"], bt["hold"]["eq"]
+    lo, hi = min(es + eh), max(es + eh)
+    BX = lambda i: bx0 + (bx1 - bx0) * i / (len(es) - 1)
+    BY = lambda v: by1 - (v - lo) / (hi - lo) * (by1 - by0)
+    line = lambda eq: "M" + " L".join(f"{BX(i):.1f},{BY(v):.1f}" for i, v in enumerate(eq) if i % 3 == 0 or i == len(eq) - 1)
+    out.append(f'<line x1="{bx0}" y1="{BY(1):.1f}" x2="{bx1}" y2="{BY(1):.1f}" stroke="{C["surface0"]}"/>'
+               f'<path d="{line(eh)}" fill="none" stroke="{C["overlay"]}" stroke-width="1.3" stroke-dasharray="3 2"/>'
+               f'<path d="{line(es)}" fill="none" stroke="{C["mauve"]}" stroke-width="1.8"/>')
+    for i, (lab, k, col) in enumerate((("━ strat ", "strat", "mauve"), ("┅ hold  ", "hold", "overlay"))):
+        r = bt[k]
+        out.append(T(x0 + 14, y0 + 234 + i * 18,
+                     [(lab, col), ("CAGR ", "subtext"), (f"{r['cagr'] * 100:+.1f}% ", "text"),
+                      ("SR ", "subtext"), (f"{r['sharpe']:.2f} ", "yellow"),
+                      ("DD ", "subtext"), (f"{r['mdd'] * 100:.0f}%", "red")], 12.5))
     return "".join(out)
 
 
-def pane_econ(x0, y0, w, m):
+def pane_econ(x0, y0, w, m, mac):
     out = [pane_title(x0 + 14, y0 + 20, "2:econ", w - 28),
            T(x0 + 14, y0 + 42, [("US curve ", "mauve"), ("━ now ", "teal"), ("┅ 3m ago", "overlay")])]
     keys, labs = ("y3m", "y5y", "y10", "y30"), ("3M", "5Y", "10Y", "30Y")
@@ -419,12 +543,16 @@ def pane_econ(x0, y0, w, m):
             s += [(lab, "subtext"), (fmt.format(m[k]["c"][-1]) + " ", "text"), (a, c)]
         return s
     out += [
-        T(x0 + 14, y0 + 172, [("10Y–3M ", "subtext"), (f"{spread:+.2f}pp ", sc), (f"{state} curve", "text")]),
-        T(x0 + 14, y0 + 191, macro("dxy", "DXY ", "{:.1f}", "inr", "  INR ", "{:.2f}"), 12.5),
-        T(x0 + 14, y0 + 210, macro("oil", "OIL ", "{:.1f}", "gold", "  GOLD ", "{:,.0f}"), 12.5),
-        T(x0 + 14, y0 + 232, [("read ", "overlay"), (f"{state} curve · {usd}", "peach")]),
-        T(x0 + 14, y0 + 250, [("Δ = 1 month · rule-based", "overlay")], 10.5),
+        T(x0 + 14, y0 + 166, [("10Y–3M ", "subtext"), (f"{spread:+.2f}pp ", sc), (state, "text"),
+                              (" · ", "overlay"), (usd, "peach")]),
+        T(x0 + 14, y0 + 184, [("1m ", "overlay")] + macro("dxy", "DXY ", "{:.1f}", "inr", "  INR ", "{:.2f}"), 12.5),
+        T(x0 + 14, y0 + 202, [("   ", "overlay")] + macro("oil", "OIL ", "{:.1f}", "gold", "  GOLD ", "{:,.0f}"), 12.5),
+        T(x0 + 14, y0 + 224, [(f"IMF '{mac['year'][2:]} ", "mauve"), ("   GDP     CPI  fiscal", "overlay")], 12.5),
     ]
+    for i, (cc, lab, col) in enumerate((("IND", "India   ", "peach"), ("USA", "US      ", "blue"))):
+        out.append(T(x0 + 14, y0 + 242 + i * 18,
+                     [(lab, col), (f"{mac[cc + '_gdp']:>5.1f}%  ", "text"), (f"{mac[cc + '_cpi']:>5.1f}%  ", "text"),
+                      (f"{mac[cc + '_fiscal']:>5.1f}%", "red" if mac[cc + "_fiscal"] < 0 else "green")], 12.5))
     return "".join(out)
 
 
@@ -502,11 +630,11 @@ def money(v):
     return ("−" if v < 0 else "") + s
 
 
-def pane_fin(x0, y0, w, f):
+def pane_fin(x0, y0, w, tk, f):
     """Accounting: income-statement waterfall, A = L + E check, cash conversion."""
     O = "overlay"
     out = [pane_title(x0 + 14, y0 + 20, "5:fin", w - 28),
-           T(x0 + 14, y0 + 42, [("NVDA ", "mauve"), (f"FY{f['fy_end'][:4]} · 10-K · income statement · $B", O)])]
+           T(x0 + 14, y0 + 42, [(tk + " ", "mauve"), (f"FY{f['fy_end'][:4]} · 10-K · income statement · $B", O)])]
     other = f["ni"] + f["tax"] - f["opinc"]
     items = [("revenue", f["rev"], 1, "blue"), ("cogs", -f["cogs"], 0, None), ("gross", f["gp"], 1, "sapphire"),
              ("opex", -f["opex"], 0, None), ("op inc", f["opinc"], 1, "teal"), ("other", other, 0, None),
@@ -540,7 +668,8 @@ def pane_fin(x0, y0, w, f):
                               ("  rev ", "subtext"), (f"{(f['rev'] / f['rev_prev'] - 1) * 100:+.0f}% y/y", "green")], 12.5),
         T(x0 + 14, y0 + 205, [("balance ", O), ("A ", "subtext"), (money(f["assets"]), "text"), (" = L ", "subtext"),
                               (money(f["liab"]), "text"), (" + E ", "subtext"), (money(f["equity"]) + "  ", "text"),
-                              ("✓ balances" if ok else f"Δ {money(gap)}", "green" if ok else "yellow")], 12.5),
+                              ("(L = A − E)" if f.get("liab_derived") else "✓ balances" if ok else f"Δ {money(gap)}",
+                               "overlay" if f.get("liab_derived") else "green" if ok else "yellow")], 12.5),
         T(x0 + 14, y0 + 224, [("cash    ", O), ("CFO ", "subtext"), (money(f["cfo"]), "text"), (" − capex ", "subtext"),
                               (money(f["capex"]), "text"), (" = FCF ", "subtext"), (money(fcf), "teal"),
                               (f"  {fcf / f['ni'] * 100:.0f}% of NI", O)], 12.5),
@@ -548,12 +677,12 @@ def pane_fin(x0, y0, w, f):
     return "".join(out)
 
 
-def pane_val(x0, y0, w, v):
+def pane_val(x0, y0, w, tk, v):
     """Corporate finance: CAPM → WACC → reverse DCF, plus a WACC × gT sensitivity grid."""
     O = "overlay"
     a, col = arrow(v["chg"])
     out = [pane_title(x0 + 14, y0 + 20, "6:val", w - 28),
-           T(x0 + 14, y0 + 42, [("NVDA ", "mauve"), (f"${v['price']:,.2f} ", "text"), (a, col),
+           T(x0 + 14, y0 + 42, [(tk + " ", "mauve"), (f"${v['price']:,.2f} ", "text"), (a, col),
                                 ("  mcap ", "subtext"), (money(v["mcap"]), "text")])]
     p = lambda x: f"{x * 100:.2f}%"
     rows = [
@@ -583,15 +712,18 @@ def pane_val(x0, y0, w, v):
     out += [
         T(x0 + 14, y0 + 172, [("reverse DCF ", O), ("market prices in ", "subtext"),
                               (f"{v['g'] * 100:.1f}%", "yellow"), (" FCF CAGR for 10y", "subtext")], 13.5, weight=600),
-        T(x0 + 14, y0 + 193, [("= FCF ", O), (f"×{(1 + v['g']) ** 10:.1f}", "text"),
-                              (" by year 10, then gT forever · centre cell ≈ price", O)], 11.5),
+        T(x0 + 14, y0 + 193,
+          [("⚠ ", "peach"), ("capex cycle: FCF trough (", "peach"), (f"{v['fcf0'] / v['ni']:.0%} of NI", "text"),
+           (") → growth overstated", "peach")] if v["capex_heavy"] else
+          [("= FCF ", O), (f"×{(1 + v['g']) ** 10:.1f}", "text"),
+           (" by year 10, then gT forever · centre cell ≈ price", O)], 11.5),
         T(x0 + 14, y0 + 222, [("# 2-stage DCF · ERP 5% · Kd = rf+1% · FCF = CFO − capex · not advice", O)], 10.5),
     ]
     return "".join(out)
 
 
 # ── compose ─────────────────────────────────────────────────────────────────
-def operator(m, f):
+def operator(m, tk, f, mac):
     W, H = 984, 830
     TOP, MID, MID2, BOT = 40, 307, 548, 792   # row starts / end
     c1, c2, b1, f1 = 328, 656, 400, 492       # column splits: top row, middle row, bottom row
@@ -612,9 +744,9 @@ def operator(m, f):
            f'fill-opacity="0.80" stroke="{S1}"/>'
            + titlebar(W, "abhinav@indra-os — tmux: operator")
            + seps
-           + pane_ai(0, TOP, c1) + pane_quant(c1, TOP, c2 - c1, m) + pane_econ(c2, TOP, W - c2, m)
+           + pane_ai(0, TOP, c1) + pane_quant(c1, TOP, c2 - c1, m) + pane_econ(c2, TOP, W - c2, m, mac)
            + pane_gtm(0, MID, b1) + pane_biz(b1, MID, W - b1)
-           + pane_fin(0, MID2, f1, f) + pane_val(f1, MID2, W - f1, valuation(f, m))
+           + pane_fin(0, MID2, f1, tk, f) + pane_val(f1, MID2, W - f1, tk, valuation(tk, f, m))
            + status)
 
     M, BARH, GAP = 28, 56, 16
@@ -631,7 +763,8 @@ def operator(m, f):
 
 
 def main():
-    svg = operator(markets(), fundamentals())
+    tk, f = fundamentals(*today_company())
+    svg = operator(markets(), tk, f, macro())
     import xml.dom.minidom
     xml.dom.minidom.parseString(svg)            # ponytail: one self-check — well-formed XML
     p = os.path.join(os.path.dirname(HERE), "assets", "operator.svg")
