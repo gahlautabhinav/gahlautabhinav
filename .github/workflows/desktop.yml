@@ -1,5 +1,5 @@
 name: live-desktop
-# Refresh the live panels: git pane (recent commits) + quant desk (market data).
+# Refresh assets/operator.svg: live git log (recent commits) + quant/econ panes (market data).
 on:
   schedule:
     - cron: "0 */6 * * *"      # every 6 hours
@@ -41,5 +41,5 @@ jobs:
           # bump the README cache-buster so GitHub's image proxy re-fetches
           sed -i -E "s/\.svg\?v=[0-9]+/.svg?v=$(date +%s)/g" README.md
           git add README.md
-          git commit -m "chore: refresh live desktop + quant desk"
+          git commit -m "chore: refresh live operator dashboard"
           git push
