@@ -1,5 +1,5 @@
 name: live-desktop
-# Refresh the git pane in assets/desktop.svg from real recent commits.
+# Refresh the live panels: git pane (recent commits) + quant desk (market data).
 on:
   schedule:
     - cron: "0 */6 * * *"      # every 6 hours
@@ -33,13 +33,13 @@ jobs:
           python tools/gen.py
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add assets/desktop.svg tools/recent_commits.json
+          git add assets/*.svg tools/recent_commits.json tools/markets.json
           if git diff --staged --quiet; then
             echo "no change — nothing to commit"
             exit 0
           fi
           # bump the README cache-buster so GitHub's image proxy re-fetches
-          sed -i -E "s/desktop\.svg\?v=[0-9]+/desktop.svg?v=$(date +%s)/" README.md
+          sed -i -E "s/\.svg\?v=[0-9]+/.svg?v=$(date +%s)/g" README.md
           git add README.md
-          git commit -m "chore: refresh live desktop (recent commits)"
+          git commit -m "chore: refresh live desktop + quant desk"
           git push

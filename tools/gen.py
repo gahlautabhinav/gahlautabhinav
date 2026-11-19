@@ -147,7 +147,7 @@ def terminal(title, lines, *, animate=False, min_cols=0, cursor=True,
             f'<style>{css}</style>{window}</svg>')
 
 
-def tmux_session():
+def tmux_session(live=None):
     """Everything in ONE terminal window, split into tmux panes + status bar."""
     NCOLS = 94
     VSPLIT = 52                                   # column of the vertical pane split
@@ -281,12 +281,12 @@ def tmux_session():
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W2}" height="{H2}" viewBox="0 0 {W2} {H2}" role="img">
 <style>text{{font-family:{FONT};font-size:{FS}px;font-variant-ligatures:none;white-space:pre;}} .ttl{{font-size:13px;fill:{C['subtext']};}}</style>
 {wp}
-<g transform="translate({M},{M})">{_yasb_inner(W)}</g>
+<g transform="translate({M},{M})">{_yasb_inner(W, live=live)}</g>
 <g transform="translate({M},{ty})">{win}</g>
 </svg>'''
 
 
-def _yasb_inner(W, H=56):
+def _yasb_inner(W, H=56, live=None):
     """YASB status-bar content (bg + pills) drawn at 0,0 for the given width."""
     CR, ST, TX = C['crust'], C['subtext'], C['text']
     S0, MA = C['surface0'], C['mauve']
@@ -312,7 +312,7 @@ def _yasb_inner(W, H=56):
         x += w + 6
 
     # right cluster: widgets, laid out right-to-left
-    widgets = [("CPU 34%", TX, S0), ("MEM 11.2G", TX, S0), ("● 3 agents", CR, C['green']),
+    widgets = [live or ("CPU 34%", TX, S0), ("MEM 11.2G", TX, S0), ("● 3 agents", CR, C['green']),
                ("claude-opus", CR, C['blue']), ("main", CR, C['peach']), ("14:22", CR, C['lavender'])]
     rx = W - 14
     for txt, fg, bg in reversed(widgets):
@@ -325,6 +325,230 @@ def _yasb_inner(W, H=56):
 
     bg = f'<rect x="0.5" y="0.5" width="{W-1}" height="{H-1}" rx="14" fill="{C["mantle"]}" fill-opacity="0.82" stroke="{C["surface0"]}"/>'
     return bg + "".join(parts)
+
+
+# ── live markets: Yahoo chart API, cached to tools/markets.json ──────────────
+# (key, yahoo symbol, tape label, number format)
+TICKERS = [
+    ("nifty", "^NSEI", "NIFTY", "{:,.1f}"),
+    ("spx", "^GSPC", "S&P500", "{:,.1f}"),
+    ("btc", "BTC-USD", "BTC", "{:,.0f}"),
+    ("inr", "INR=X", "USD/INR", "{:.2f}"),
+    ("gold", "GC=F", "GOLD", "{:,.1f}"),
+    ("tnx", "^TNX", "US10Y", "{:.2f}%"),
+]
+CORR = [("nifty", "NIF"), ("spx", "SPX"), ("btc", "BTC"), ("gold", "GLD"), ("inr", "INR")]
+
+
+def _fetch(sym):
+    """6 months of daily OHLC for one symbol, keyed by exchange-local date."""
+    import urllib.request, urllib.parse, time
+    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/"
+           f"{urllib.parse.quote(sym)}?range=6mo&interval=1d")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        res = json.load(r)["chart"]["result"][0]
+    off = res["meta"].get("gmtoffset", 0)
+    q = res["indicators"]["quote"][0]
+    rows = {}
+    for ts, o, h, l, c in zip(res["timestamp"], q["open"], q["high"], q["low"], q["close"]):
+        if None not in (o, h, l, c):
+            rows[time.strftime("%Y-%m-%d", time.gmtime(ts + off))] = (o, h, l, c)
+    days = sorted(rows)
+    if len(days) < 61:
+        raise ValueError(f"only {len(days)} bars")
+    return {"d": days, **{k: [round(rows[d][i], 4) for d in days] for i, k in enumerate("ohlc")}}
+
+
+def markets():
+    """Fetch every ticker; on any per-symbol failure fall back to the cached copy.
+    Returns the merged dict, or None if some ticker has never been fetched."""
+    import time
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "markets.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+    fresh = False
+    for key, sym, *_ in TICKERS:
+        try:
+            data[key] = _fetch(sym)
+            fresh = True
+        except Exception as e:
+            print(f"markets: {sym} fetch failed ({e}) — using cache")
+    if fresh:
+        data["asof"] = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, separators=(",", ":"))
+    return data if all(k in data for k, *_ in TICKERS) else None
+
+
+def signals(c):
+    """Quant read-out from a close series (needs >= 61 closes)."""
+    import math, statistics as st
+    r = [math.log(b / a) for a, b in zip(c, c[1:])]
+    s20, s50 = sum(c[-20:]) / 20, sum(c[-50:]) / 50
+    vol20 = st.stdev(r[-20:]) * math.sqrt(252)
+    vol_all = st.stdev(r) * math.sqrt(252)
+    peak, mdd = c[-60], 0.0
+    for x in c[-60:]:
+        peak = max(peak, x)
+        mdd = min(mdd, x / peak - 1)
+    trend = ("uptrend" if c[-1] > s50 and s20 > s50 else
+             "downtrend" if c[-1] < s50 and s20 < s50 else "range")
+    vreg = ("high vol" if vol20 > 1.2 * vol_all else
+            "low vol" if vol20 < 0.8 * vol_all else "normal vol")
+    return dict(
+        last=c[-1], chg=c[-1] / c[-2] - 1, mom20=c[-1] / c[-21] - 1, vol20=vol20,
+        sharpe=st.mean(r[-60:]) / st.stdev(r[-60:]) * math.sqrt(252), mdd=mdd,
+        z=(c[-1] - s20) / st.stdev(c[-20:]), regime=f"{trend} · {vreg}")
+
+
+def correlations(m, n=60):
+    """n-day log-return correlation matrix over dates all CORR assets share."""
+    import math, statistics as st
+    common = sorted(set.intersection(*(set(m[k]["d"]) for k, _ in CORR)))[-(n + 1):]
+    rets = []
+    for k, _ in CORR:
+        px = dict(zip(m[k]["d"], m[k]["c"]))
+        s = [px[d] for d in common]
+        rets.append([math.log(b / a) for a, b in zip(s, s[1:])])
+    return [[st.correlation(a, b) for b in rets] for a in rets], len(common) - 1
+
+
+def markets_panel(m):
+    """Live quant desk: ticker tape, NIFTY candles + SMA20, signals, corr heatmap."""
+    W, H = int(96 * CW + 2 * PADX), 512
+    nf = m["nifty"]
+    sig = signals(nf["c"])
+    up_c, dn_c = C["green"], C["red"]
+
+    def row(x, y, spans, size=None, anchor=None):
+        st = f' style="font-size:{size}px"' if size else ""
+        an = f' text-anchor="{anchor}"' if anchor else ""
+        inner = "".join(f'<tspan fill="{C.get(col, col)}">{esc(s)}</tspan>' for s, col in spans)
+        return f'<text x="{x:.1f}" y="{y:.1f}"{an}{st} xml:space="preserve">{inner}</text>'
+
+    def arrow(v):
+        return ("▲" if v >= 0 else "▼") + f"{abs(v) * 100:.2f}%", ("green" if v >= 0 else "red")
+
+    # ── ticker tape (two copies scrolled left forever) ─────────────────────
+    TFS = 14
+    tcw = CW * TFS / FS
+    spans, n = [], 0
+    for key, _, label, fmt in TICKERS:
+        c = m[key]["c"]
+        a, col = arrow(c[-1] / c[-2] - 1)
+        for s, k in ((label + " ", "subtext"), (fmt.format(c[-1]) + " ", "text"), (a, col), ("   ◆   ", "surface1")):
+            spans.append((s, k))
+            n += len(s)
+    tw = n * tcw
+    tape = (f'<clipPath id="tc"><rect x="1" y="40" width="{W - 2}" height="32"/></clipPath>'
+            f'<rect x="1" y="40" width="{W - 2}" height="32" fill="{C["crust"]}" fill-opacity="0.55"/>'
+            f'<g clip-path="url(#tc)"><g class="tape">'
+            + row(14, 61, spans, TFS) + row(14 + tw, 61, spans, TFS) + '</g></g>')
+
+    # ── header ─────────────────────────────────────────────────────────────
+    live = f"LIVE  as of {m.get('asof', '?')}"
+    head = (row(PADX, 102, [("❯ ", "green"), ("./quant-desk ", "text"), ("--live", "overlay")])
+            + f'<circle cx="{W - PADX - len(live) * CW * 12.5 / FS - 10:.0f}" cy="98" r="4.5" fill="{up_c}" class="pulse"/>'
+            + row(W - PADX, 102, [(live[:6], "green"), (live[6:], "overlay")], 12.5, "end"))
+
+    # ── NIFTY candlesticks + SMA20 ────────────────────────────────────────
+    N = 60
+    x0, x1, y0, y1 = PADX + 4, 520, 152, 432
+    o, h, l, c, d = (nf[k][-N:] for k in "ohlcd")
+    lo, hi = min(l), max(h)
+    pad = (hi - lo) * 0.06
+    lo, hi = lo - pad, hi + pad
+    Y = lambda v: y1 - (v - lo) / (hi - lo) * (y1 - y0)
+    step = (x1 - x0) / N
+    X = lambda i: x0 + step * (i + 0.5)
+    grid = ""
+    for k in range(5):
+        v = lo + (hi - lo) * k / 4
+        grid += (f'<line x1="{x0}" y1="{Y(v):.1f}" x2="{x1}" y2="{Y(v):.1f}" stroke="{C["surface0"]}"/>'
+                 + (row(x1 + 8, Y(v) + 4, [(f"{v:,.0f}", "overlay")], 11)
+                    if abs(Y(v) - Y(c[-1])) > 16 else ""))   # don't collide with last-price pill
+    candles = ""
+    for i in range(N):
+        col = up_c if c[i] >= o[i] else dn_c
+        top, bot = Y(max(o[i], c[i])), Y(min(o[i], c[i]))
+        candles += (f'<line x1="{X(i):.1f}" y1="{Y(h[i]):.1f}" x2="{X(i):.1f}" y2="{Y(l[i]):.1f}" stroke="{col}"/>'
+                    f'<rect x="{X(i) - step * 0.32:.1f}" y="{top:.1f}" width="{step * 0.64:.1f}" '
+                    f'height="{max(bot - top, 1.2):.1f}" fill="{col}"/>')
+    allc = nf["c"]
+    sma = [sum(allc[j - 19:j + 1]) / 20 for j in range(len(allc) - N, len(allc))]
+    sma_path = "M" + " L".join(f"{X(i):.1f},{Y(v):.1f}" for i, v in enumerate(sma))
+    yl = Y(c[-1])
+    lcol = up_c if sig["chg"] >= 0 else dn_c
+    chart = (
+        row(x0, 130, [("NIFTY 50  ", "mauve"), ("1D · 60 sessions   ", "overlay"), ("━ SMA20", "lavender")], 13.5)
+        + grid
+        + f'<clipPath id="rv"><rect x="{x0 - 4}" y="{y0 - 12}" width="{x1 - x0 + 8}" height="{y1 - y0 + 24}">'
+          f'<animate attributeName="width" from="0" to="{x1 - x0 + 8}" dur="2.4s" fill="freeze"/></rect></clipPath>'
+        + f'<g clip-path="url(#rv)">{candles}'
+          f'<path d="{sma_path}" fill="none" stroke="{C["lavender"]}" stroke-width="1.8"/></g>'
+        + f'<line x1="{x0}" y1="{yl:.1f}" x2="{x1}" y2="{yl:.1f}" stroke="{lcol}" stroke-dasharray="3 3" stroke-opacity="0.8"/>'
+        + f'<rect x="{x1 + 3}" y="{yl - 10:.1f}" width="62" height="20" rx="4" fill="{lcol}"/>'
+        + row(x1 + 34, yl + 4.5, [(f"{c[-1]:,.0f}", "crust")], 11.5, "middle")
+        + "".join(row(X(i), y1 + 22, [(_md(d[i]), "overlay")], 11, "middle") for i in (0, N // 2, N - 1)))
+
+    # ── signals ───────────────────────────────────────────────────────────
+    sx = 604
+    a, acol = arrow(sig["chg"])
+    pct = lambda v: f"{v * 100:+.2f}%"
+    rows = [
+        [("last     ", "subtext"), (f"{sig['last']:,.1f}  ", "text"), (a, acol)],
+        [("mom 20d  ", "subtext"), (pct(sig["mom20"]), "green" if sig["mom20"] >= 0 else "red")],
+        [("vol 20d  ", "subtext"), (f"{sig['vol20'] * 100:.1f}% ", "text"), ("ann.", "overlay")],
+        [("sharpe   ", "subtext"), (f"{sig['sharpe']:+.2f} ", "yellow"), ("60d", "overlay")],
+        [("max dd   ", "subtext"), (pct(sig["mdd"]) + " ", "red"), ("60d", "overlay")],
+        [("z-score  ", "subtext"), (f"{sig['z']:+.2f}σ ", "teal"), ("vs SMA20", "overlay")],
+        [("regime   ", "subtext"), (sig["regime"], "peach")],
+    ]
+    sigs = row(sx, 130, [("SIGNALS", "mauve"), (" · NIFTY", "overlay")], 13.5)
+    sigs += "".join(row(sx, 160 + i * 23, r, 14) for i, r in enumerate(rows))
+
+    # ── correlation heatmap ───────────────────────────────────────────────
+    M_, nret = correlations(m)
+    hx, hy, cwid, chei = sx + 40, 348, 48, 20
+    heat = row(sx, 330, [("CORR", "mauve"), (f" · {nret}d log-returns", "overlay")], 13.5)
+    for j, (_, lab) in enumerate(CORR):
+        heat += row(hx + j * cwid + cwid / 2, hy - 6, [(lab, "overlay")], 11, "middle")
+    for i, (_, lab) in enumerate(CORR):
+        heat += row(sx, hy + i * chei + 14, [(lab, "overlay")], 11)
+        for j in range(len(CORR)):
+            v = M_[i][j]
+            col = C["blue"] if v >= 0 else C["red"]
+            heat += (f'<rect x="{hx + j * cwid + 1}" y="{hy + i * chei + 1}" width="{cwid - 2}" height="{chei - 2}" '
+                     f'rx="3" fill="{col}" fill-opacity="{0.12 + 0.78 * abs(v):.2f}"/>'
+                     + row(hx + j * cwid + cwid / 2, hy + i * chei + 14,
+                           [(f"{v:+.2f}" if i != j else "1", "crust" if abs(v) > 0.55 else "text")], 10.5, "middle"))
+
+    foot = (f'<line x1="14" y1="{H - 38}" x2="{W - 14}" y2="{H - 38}" stroke="{C["surface1"]}"/>'
+            + row(PADX, H - 16, [("# src ", "overlay"), ("Yahoo Finance", "subtext"),
+                                 (" · recomputed every 6h by GitHub Actions · stdlib-only python · not advice", "overlay")], 12.5))
+
+    css = (f"text{{font-family:{FONT};font-size:{FS}px;font-variant-ligatures:none;white-space:pre;}}"
+           f".ttl{{font-size:13px;fill:{C['subtext']};}}"
+           f".tape{{animation:tp {tw / 38:.0f}s linear infinite}}@keyframes tp{{to{{transform:translateX(-{tw:.0f}px)}}}}"
+           ".pulse{animation:pl 1.4s ease-in-out infinite}@keyframes pl{50%{opacity:.2}}")
+    window = (f'<rect x="0.5" y="0.5" width="{W - 1}" height="{H - 1}" rx="12" fill="{C["base"]}" '
+              f'fill-opacity="0.80" stroke="{C["surface1"]}"/>'
+              + _titlebar(W, "abhinav@indra-os : ~/quant-desk", frosted=True)
+              + tape + head + chart + sigs + heat + foot)
+    Mg = 28
+    W2, H2 = W + 2 * Mg, H + 2 * Mg
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W2}" height="{H2}" viewBox="0 0 {W2} {H2}" role="img">'
+            f'<style>{css}</style>{_wallpaper(W2, H2)}<g transform="translate({Mg},{Mg})">{window}</g></svg>')
+
+
+def _md(iso):
+    """'2026-11-18' -> 'Nov 18'."""
+    import datetime
+    return datetime.date.fromisoformat(iso).strftime("%b %d")
 
 
 def stack_panel():
@@ -612,8 +836,14 @@ def build():
     ]
     out["internals"] = terminal("abhinav@indra-os : systemctl cat", intern, cursor=False)
 
-    out["desktop"] = tmux_session()   # wallpaper + YASB bar + frosted terminal
-    out["stack"] = stack_panel()      # Business · AI · Quant · Economics · GTM
+    m = markets()
+    pill = None
+    if m:
+        chg = m["nifty"]["c"][-1] / m["nifty"]["c"][-2] - 1
+        pill = (f"NIFTY {'▲' if chg >= 0 else '▼'}{abs(chg) * 100:.2f}%", C["crust"], C["green" if chg >= 0 else "red"])
+        out["markets"] = markets_panel(m)   # live quant desk
+    out["desktop"] = tmux_session(pill)     # wallpaper + YASB bar + frosted terminal
+    out["stack"] = stack_panel()            # Business · AI · Quant · Economics · GTM
     return out
 
 
@@ -622,7 +852,7 @@ def main():
     root = os.path.dirname(here)
     adir = os.path.join(root, "assets")
     os.makedirs(adir, exist_ok=True)
-    KEEP = {"desktop", "stack"}    # desktop image + discipline-stack panel
+    KEEP = {"desktop", "stack", "markets"}   # desktop + discipline stack + live quant desk
     panels = {k: v for k, v in build().items() if k in KEEP}
     for name, svg in panels.items():
         p = os.path.join(adir, f"{name}.svg")
