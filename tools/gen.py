@@ -2,12 +2,14 @@
 """Generate the GitHub profile image: assets/operator.svg
 
 One Hyprland-style desktop in Catppuccin Mocha: wallpaper + YASB bar + a frosted
-tmux window split into five panes — AI · Quant · Econ · GTM · Business.
+tmux window split into seven panes — AI · Quant · Econ · GTM · Business · Finance · Valuation.
 
 Live parts (refreshed every 6h by .github/workflows/desktop.yml):
   - AI pane    real recent commits      tools/recent_commits.json (written by the Action)
   - Quant pane NIFTY candles + signals  } Yahoo chart API, cached to tools/markets.json
   - Econ pane  US yield curve + macro   } so a failed fetch falls back to the last good data
+  - Fin pane   NVIDIA latest 10-K       SEC EDGAR XBRL, cached to tools/fundamentals.json
+  - Val pane   CAPM → WACC → reverse DCF from live price, 10Y yield and beta
 
 Self-contained SVG, stdlib only. Animations are CSS/SMIL inside the SVG, which
 GitHub's image proxy plays.
@@ -78,7 +80,101 @@ TICKERS = {
     "nifty": "^NSEI", "spx": "^GSPC", "btc": "BTC-USD", "inr": "INR=X", "gold": "GC=F",
     "oil": "CL=F", "dxy": "DX-Y.NYB",
     "y3m": "^IRX", "y5y": "^FVX", "y10": "^TNX", "y30": "^TYX",   # US Treasury yields
+    "nvda": "NVDA",                                                 # valuation target
 }
+
+# ── fundamentals: SEC EDGAR XBRL (official, free, no key) ───────────────────
+CIK = "0001045810"          # NVIDIA
+SEC_UA = "indra-os-profile-bot/1.0"
+
+
+def _latest(g, tags, instant=False, n=1):
+    """Latest 10-K value(s) across candidate us-gaap tags.
+    Flows need a ~1-year duration; stocks are point-in-time. Returns [(end, val), ...] newest first."""
+    best = {}
+    for tag in tags:
+        for v in next(iter(g.get(tag, {}).get("units", {}).values()), []):
+            if v.get("form") != "10-K" or ("start" in v) == instant:
+                continue
+            if not instant:
+                days = (datetime.date.fromisoformat(v["end"]) - datetime.date.fromisoformat(v["start"])).days
+                if not 350 <= days <= 380:
+                    continue
+            k = v["end"]
+            if k not in best or v.get("filed", "") > best[k][0]:
+                best[k] = (v.get("filed", ""), v["val"])
+    ends = sorted(best, reverse=True)[:n]
+    return [(e, best[e][1]) for e in ends]
+
+
+def fundamentals():
+    """Latest-FY statements for CIK, cached to tools/fundamentals.json."""
+    import urllib.request
+    p = os.path.join(HERE, "fundamentals.json")
+    try:
+        req = urllib.request.Request(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{CIK}.json",
+                                     headers={"User-Agent": SEC_UA})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            facts = json.load(r)["facts"]
+        g = facts["us-gaap"]
+        one = lambda tags, inst=False: _latest(g, tags, inst)[0][1]
+        rev = _latest(g, ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"], n=2)
+        f = dict(
+            fy_end=rev[0][0], rev=rev[0][1], rev_prev=rev[1][1],
+            cogs=one(["CostOfRevenue"]), gp=one(["GrossProfit"]), opex=one(["OperatingExpenses"]),
+            opinc=one(["OperatingIncomeLoss"]), tax=one(["IncomeTaxExpenseBenefit"]), ni=one(["NetIncomeLoss"]),
+            assets=one(["Assets"], True), liab=one(["Liabilities"], True), equity=one(["StockholdersEquity"], True),
+            cfo=one(["NetCashProvidedByUsedInOperatingActivities"]),
+            capex=one(["PaymentsToAcquireProductiveAssets", "PaymentsToAcquirePropertyPlantAndEquipment"]),
+            cash=one(["CashAndCashEquivalentsAtCarryingValue"], True)
+                 + next(iter(_latest(g, ["MarketableSecuritiesCurrent",
+                                         "AvailableForSaleSecuritiesDebtSecuritiesCurrent"], True)), (0, 0))[1],
+            debt=one(["LongTermDebt", "LongTermDebtNoncurrent"], True),
+            shares=facts["dei"]["EntityCommonStockSharesOutstanding"]["units"]["shares"][-1]["val"],
+        )
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(f, fh, indent=1)
+        return f
+    except Exception as e:
+        print(f"fundamentals: SEC fetch failed ({e}) — using cache")
+        with open(p, encoding="utf-8") as fh:
+            return json.load(fh)
+
+
+def dcf_ev(fcf0, g, w, gT, n=10):
+    """Two-stage DCF: n years at g, then Gordon terminal at gT. Returns enterprise value."""
+    pv, f = 0.0, fcf0
+    for t in range(1, n + 1):
+        f *= 1 + g
+        pv += f / (1 + w) ** t
+    return pv + f * (1 + gT) / (w - gT) / (1 + w) ** n
+
+
+def valuation(f, m, erp=0.05, gT=0.03):
+    """CAPM → WACC → reverse DCF: the 10y FCF growth the current price implies."""
+    px = dict(zip(m["nvda"]["d"], m["nvda"]["c"]))
+    sx = dict(zip(m["spx"]["d"], m["spx"]["c"]))
+    days = [d for d in m["nvda"]["d"] if d in sx]
+    ra = [math.log(px[b] / px[a]) for a, b in zip(days, days[1:])]
+    rb = [math.log(sx[b] / sx[a]) for a, b in zip(days, days[1:])]
+    beta = st.covariance(ra, rb) / st.variance(rb)
+    rf = m["y10"]["c"][-1] / 100
+    price = m["nvda"]["c"][-1]
+    E, D = price * f["shares"], f["debt"]
+    t = f["tax"] / (f["ni"] + f["tax"])
+    ke, kd = rf + beta * erp, rf + 0.01
+    w = E / (E + D) * ke + D / (E + D) * kd * (1 - t)
+    fcf0 = f["cfo"] - f["capex"]
+    net_cash = f["cash"] - D
+    lo, hi = -0.5, 1.5                                   # bisection on equity(g) = market cap
+    for _ in range(80):
+        g = (lo + hi) / 2
+        lo, hi = (g, hi) if dcf_ev(fcf0, g, w, gT) + net_cash < E else (lo, g)
+    per_share = lambda ww, gg: ((dcf_ev(fcf0, g, ww, gg) + net_cash) / f["shares"]
+                                if ww - gg > 0.01 else None)
+    grid = [[per_share(w + dw, gg) for gg in (0.02, 0.03, 0.04)] for dw in (-0.01, 0, 0.01)]
+    return dict(beta=beta, rf=rf, ke=ke, w=w, dv=D / (D + E), fcf0=fcf0, g=g, price=price, mcap=E,
+                chg=price / m["nvda"]["c"][-2] - 1, erp=erp, gT=gT, grid=grid, tax=t)
 
 
 def _fetch(sym):
@@ -400,21 +496,117 @@ def pane_biz(x0, y0, w):
     return "".join(out)
 
 
+def money(v):
+    a = abs(v)
+    s = f"${a / 1e12:.2f}T" if a >= 1e12 else f"${a / 1e9:,.1f}B" if a >= 1e9 else f"${a / 1e6:,.0f}M"
+    return ("−" if v < 0 else "") + s
+
+
+def pane_fin(x0, y0, w, f):
+    """Accounting: income-statement waterfall, A = L + E check, cash conversion."""
+    O = "overlay"
+    out = [pane_title(x0 + 14, y0 + 20, "5:fin", w - 28),
+           T(x0 + 14, y0 + 42, [("NVDA ", "mauve"), (f"FY{f['fy_end'][:4]} · 10-K · income statement · $B", O)])]
+    other = f["ni"] + f["tax"] - f["opinc"]
+    items = [("revenue", f["rev"], 1, "blue"), ("cogs", -f["cogs"], 0, None), ("gross", f["gp"], 1, "sapphire"),
+             ("opex", -f["opex"], 0, None), ("op inc", f["opinc"], 1, "teal"), ("other", other, 0, None),
+             ("tax", -f["tax"], 0, None), ("net", f["ni"], 1, "green")]
+    base, top = y0 + 150, y0 + 66
+    Y = lambda v: base - v / f["rev"] * (base - top)
+    slot = (w - 28) / len(items)
+    level, prev_x = 0.0, None
+    for i, (lab, v, total, col) in enumerate(items):
+        x = x0 + 14 + i * slot + slot * 0.14
+        bw = slot * 0.72
+        a, b = (0, v) if total else (level, level + v)
+        level = v if total else level + v
+        cc = C[col] if total else C["green" if v >= 0 else "red"]
+        out.append(f'<rect x="{x:.1f}" y="{Y(max(a, b)):.1f}" width="{bw:.1f}" height="{max(abs(Y(a) - Y(b)), 1.5):.1f}" '
+                   f'rx="2" fill="{cc}" fill-opacity="{0.9 if total else 0.75}"/>')
+        if prev_x is not None:     # dashed connector at the running level
+            out.append(f'<line x1="{prev_x:.1f}" y1="{Y(level if total else a):.1f}" x2="{x:.1f}" '
+                       f'y2="{Y(level if total else a):.1f}" stroke="{C["overlay"]}" stroke-dasharray="2 2"/>')
+        prev_x = x + bw
+        lbl = f"{money(v)[:-1] if total else ('+' if v >= 0 else '−') + f'{abs(v) / 1e9:.0f}'}"
+        out.append(T(x + bw / 2, Y(max(a, b)) - 5, [(lbl, "text" if total else "subtext")], 10.5, "middle")
+                   + T(x + bw / 2, base + 14, [(lab, O)], 10.5, "middle"))
+    pc = lambda v: f"{v / f['rev'] * 100:.1f}%"
+    gap = f["assets"] - f["liab"] - f["equity"]
+    ok = abs(gap) / f["assets"] < 0.005
+    fcf = f["cfo"] - f["capex"]
+    out += [
+        T(x0 + 14, y0 + 186, [("margins ", O), ("gross ", "subtext"), (pc(f["gp"]), "text"), ("  op ", "subtext"),
+                              (pc(f["opinc"]), "text"), ("  net ", "subtext"), (pc(f["ni"]), "text"),
+                              ("  rev ", "subtext"), (f"{(f['rev'] / f['rev_prev'] - 1) * 100:+.0f}% y/y", "green")], 12.5),
+        T(x0 + 14, y0 + 205, [("balance ", O), ("A ", "subtext"), (money(f["assets"]), "text"), (" = L ", "subtext"),
+                              (money(f["liab"]), "text"), (" + E ", "subtext"), (money(f["equity"]) + "  ", "text"),
+                              ("✓ balances" if ok else f"Δ {money(gap)}", "green" if ok else "yellow")], 12.5),
+        T(x0 + 14, y0 + 224, [("cash    ", O), ("CFO ", "subtext"), (money(f["cfo"]), "text"), (" − capex ", "subtext"),
+                              (money(f["capex"]), "text"), (" = FCF ", "subtext"), (money(fcf), "teal"),
+                              (f"  {fcf / f['ni'] * 100:.0f}% of NI", O)], 12.5),
+    ]
+    return "".join(out)
+
+
+def pane_val(x0, y0, w, v):
+    """Corporate finance: CAPM → WACC → reverse DCF, plus a WACC × gT sensitivity grid."""
+    O = "overlay"
+    a, col = arrow(v["chg"])
+    out = [pane_title(x0 + 14, y0 + 20, "6:val", w - 28),
+           T(x0 + 14, y0 + 42, [("NVDA ", "mauve"), (f"${v['price']:,.2f} ", "text"), (a, col),
+                                ("  mcap ", "subtext"), (money(v["mcap"]), "text")])]
+    p = lambda x: f"{x * 100:.2f}%"
+    rows = [
+        [("rf    ", "subtext"), (p(v["rf"]) + "  ", "text"), ("US10Y · live", O)],
+        [("β     ", "subtext"), (f"{v['beta']:.2f}   ", "yellow"), ("vs S&P · 6m daily", O)],
+        [("Ke    ", "subtext"), (p(v["ke"]) + "  ", "text"), (f"rf + β·{v['erp'] * 100:.0f}% ERP", O)],
+        [("WACC  ", "subtext"), (p(v["w"]) + "  ", "mauve"), (f"D/V {v['dv'] * 100:.1f}%", O)],
+        [("FCF₀  ", "subtext"), (money(v["fcf0"]) + "  ", "teal"), (f"gT {v['gT'] * 100:.0f}%", O)],
+    ]
+    out += [T(x0 + 14, y0 + 66 + i * LH, r, 12.5) for i, r in enumerate(rows)]
+
+    gx, gy, cw_, ch = x0 + w - 14 - 44 - 3 * 46, y0 + 58, 46, 22
+    out.append(T(gx, gy, [("value/share", "mauve"), (" · WACC×gT", O)], 11))
+    for j, gg in enumerate(("2%", "3%", "4%")):
+        out.append(T(gx + 44 + j * cw_ + cw_ / 2, gy + 18, [(gg, O)], 10.5, "middle"))
+    for i, dw in enumerate((-0.01, 0, 0.01)):
+        out.append(T(gx, gy + 38 + i * ch, [(f"{(v['w'] + dw) * 100:.1f}%", "mauve" if dw == 0 else O)], 10.5))
+        for j in range(3):
+            val = v["grid"][i][j]
+            if val is None:
+                continue
+            up = val >= v["price"]
+            out.append(f'<rect x="{gx + 44 + j * cw_ + 1:.1f}" y="{gy + 24 + i * ch:.1f}" width="{cw_ - 2}" height="{ch - 2}" '
+                       f'rx="3" fill="{C["green" if up else "red"]}" '
+                       f'fill-opacity="{min(0.85, 0.15 + abs(val / v["price"] - 1) * 1.5):.2f}"/>'
+                       + T(gx + 44 + j * cw_ + cw_ / 2, gy + 38 + i * ch, [(f"${val:,.0f}", "text")], 10.5, "middle"))
+    out += [
+        T(x0 + 14, y0 + 172, [("reverse DCF ", O), ("market prices in ", "subtext"),
+                              (f"{v['g'] * 100:.1f}%", "yellow"), (" FCF CAGR for 10y", "subtext")], 13.5, weight=600),
+        T(x0 + 14, y0 + 193, [("= FCF ", O), (f"×{(1 + v['g']) ** 10:.1f}", "text"),
+                              (" by year 10, then gT forever · centre cell ≈ price", O)], 11.5),
+        T(x0 + 14, y0 + 222, [("# 2-stage DCF · ERP 5% · Kd = rf+1% · FCF = CFO − capex · not advice", O)], 10.5),
+    ]
+    return "".join(out)
+
+
 # ── compose ─────────────────────────────────────────────────────────────────
-def operator(m):
-    W, H = 984, 584
-    TOP, MID, BOT = 40, 307, 548          # top-row start, row split, bottom-row end
-    c1, c2, b1 = 328, 656, 400            # top-row column splits, bottom-row split
+def operator(m, f):
+    W, H = 984, 830
+    TOP, MID, MID2, BOT = 40, 307, 548, 792   # row starts / end
+    c1, c2, b1, f1 = 328, 656, 400, 492       # column splits: top row, middle row, bottom row
     O, S1 = C["overlay"], C["surface1"]
     seps = (f'<line x1="{c1}" y1="{TOP}" x2="{c1}" y2="{MID - 4}" stroke="{O}"/>'
             f'<line x1="{c2}" y1="{TOP}" x2="{c2}" y2="{MID - 4}" stroke="{O}"/>'
             f'<line x1="10" y1="{MID}" x2="{W - 10}" y2="{MID}" stroke="{S1}"/>'
-            f'<line x1="{b1}" y1="{MID + 4}" x2="{b1}" y2="{BOT}" stroke="{O}"/>')
+            f'<line x1="{b1}" y1="{MID + 4}" x2="{b1}" y2="{MID2 - 4}" stroke="{O}"/>'
+            f'<line x1="10" y1="{MID2}" x2="{W - 10}" y2="{MID2}" stroke="{S1}"/>'
+            f'<line x1="{f1}" y1="{MID2 + 4}" x2="{f1}" y2="{BOT}" stroke="{O}"/>')
     sb = H - 30
     status = (f'<rect x="8" y="{sb}" width="{W - 16}" height="24" rx="7" fill="{C["green"]}"/>'
               f'<rect x="8" y="{sb}" width="78" height="24" rx="7" fill="{C["mauve"]}"/>'
               + T(22, sb + 17, [("indra", "crust")], PS, weight=700)
-              + T(100, sb + 17, [("0:ai  1:quant  2:econ  3:gtm  4:biz", "crust")])
+              + T(100, sb + 17, [("0:ai  1:quant  2:econ  3:gtm  4:biz  5:fin  6:val", "crust")])
               + T(W - 22, sb + 17, [(f"data {m['asof']}", "crust")], 12, "end"))
     win = (f'<rect x="0.5" y="0.5" width="{W - 1}" height="{H - 1}" rx="12" fill="{C["base"]}" '
            f'fill-opacity="0.80" stroke="{S1}"/>'
@@ -422,6 +614,7 @@ def operator(m):
            + seps
            + pane_ai(0, TOP, c1) + pane_quant(c1, TOP, c2 - c1, m) + pane_econ(c2, TOP, W - c2, m)
            + pane_gtm(0, MID, b1) + pane_biz(b1, MID, W - b1)
+           + pane_fin(0, MID2, f1, f) + pane_val(f1, MID2, W - f1, valuation(f, m))
            + status)
 
     M, BARH, GAP = 28, 56, 16
@@ -438,7 +631,7 @@ def operator(m):
 
 
 def main():
-    svg = operator(markets())
+    svg = operator(markets(), fundamentals())
     import xml.dom.minidom
     xml.dom.minidom.parseString(svg)            # ponytail: one self-check — well-formed XML
     p = os.path.join(os.path.dirname(HERE), "assets", "operator.svg")
