@@ -4,7 +4,7 @@
 
 <div align="center">
 
-<img src="assets/operator.svg?v=1795511793" width="100%" alt="abhinav — AI · Business · Quant · Economics · GTM: live tmux dashboard with agent topology, NIFTY signals, US yield curve, GTM funnel, unit-economics tree, SMA backtest, India vs US macro, a daily-rotating big-tech 10-K waterfall and live reverse DCF"/>
+<img src="assets/operator.svg?v=1795558211" width="100%" alt="abhinav — AI · Business · Quant · Economics · GTM: live tmux dashboard with agent topology, NIFTY signals, US yield curve, GTM funnel, unit-economics tree, SMA backtest, India vs US macro, a daily-rotating big-tech 10-K waterfall and live reverse DCF"/>
 
 <sub>live · markets, SEC filings, IMF + commits refresh every 6h · stdlib python → svg</sub>
 
